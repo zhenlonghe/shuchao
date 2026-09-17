@@ -1,0 +1,16 @@
+<resources>
+    <!-- 墨水屏：纯白底、无窗口动画、无启动预览窗 -->
+    <style name="Theme.Reader" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- 透明：书架备好之前什么都不画，桌面一直留到完整的书架出现，启动只刷一次屏。各页面自己铺白底 -->
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <!-- 不要系统的启动画面：墨水屏上它是一次多余的整屏刷新。Android 12+ 无视 windowDisablePreview，
+             只有「半透明窗口」不会被套启动画面——窗口内容本身仍是不透明白底，桌面停留到书架首帧画好为止 -->
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:statusBarColor">@android:color/white</item>
+        <item name="android:navigationBarColor">@android:color/white</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

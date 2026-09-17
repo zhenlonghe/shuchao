@@ -1,0 +1,4 @@
+<resources>
+    <!-- 书巢图标：淡墨青（水墨感）。Kaleido 彩屏会把颜色压暗，所以取得比设计原稿（#4E6B78）更浅 -->
+    <color name="ic_launcher_background">#6F919D</color>
+</resources>

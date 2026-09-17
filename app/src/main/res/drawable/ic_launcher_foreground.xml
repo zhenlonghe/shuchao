@@ -1,0 +1,35 @@
+<!-- 书巢图标前景，源文件 design/shuchao-icon.svg（1024 画布）。
+     原稿的 880 圆角方块对应自适应图标的 72dp 可见区（72/880），再放大 1.2 倍：墨案桌面的蒙版近乎直角方形，
+     原比例下书显得小；放大后最远的角距中心 ≈ 30.5dp，仍在 33dp 的安全圆内。中心 (512,512) → (54,54) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.098182"
+        android:scaleY="0.098182"
+        android:translateX="3.731"
+        android:translateY="3.731">
+        <!-- 后层：巢 -->
+        <path
+            android:fillColor="#B7CDD5"
+            android:pathData="M248,350 Q248,318 278,330 L470,404 Q500,416 512,448 L512,770 L292,690 Q248,674 248,628 Z" />
+        <path
+            android:fillColor="#B7CDD5"
+            android:pathData="M776,350 Q776,318 746,330 L554,404 Q524,416 512,448 L512,770 L732,690 Q776,674 776,628 Z" />
+        <!-- 前层：书页 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M318,292 Q292,268 292,308 L292,554 Q292,584 314,606 L512,784 L512,426 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M706,292 Q732,268 732,308 L732,554 Q732,584 710,606 L512,784 L512,426 Z" />
+        <!-- 书脊：露出底色 -->
+        <path
+            android:strokeColor="#6F919D"
+            android:strokeWidth="12"
+            android:strokeLineCap="round"
+            android:pathData="M512,426 L512,784" />
+    </group>
+</vector>

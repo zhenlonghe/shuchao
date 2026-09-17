@@ -1,0 +1,53 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024"
+     xmlns="http://www.w3.org/2000/svg">
+
+  <!-- 书巢 · Color e-ink icon
+       Flat colors only: no gradients, no shadows -->
+
+  <!-- ink-blue background (tuned for Kaleido 3: lighter ink-wash tone; the panel darkens colors) -->
+  <rect x="72" y="72" width="880" height="880" rx="210" fill="#6F919D"/>
+
+  <!-- rear pages / nest layer -->
+  <path d="M248 350
+           Q248 318 278 330
+           L470 404
+           Q500 416 512 448
+           L512 770
+           L292 690
+           Q248 674 248 628 Z"
+        fill="#B7CDD5"/>
+
+  <path d="M776 350
+           Q776 318 746 330
+           L554 404
+           Q524 416 512 448
+           L512 770
+           L732 690
+           Q776 674 776 628 Z"
+        fill="#B7CDD5"/>
+
+  <!-- front book pages -->
+  <path d="M318 292
+           Q292 268 292 308
+           L292 554
+           Q292 584 314 606
+           L512 784
+           L512 426
+           Z"
+        fill="#FFFFFF"/>
+
+  <path d="M706 292
+           Q732 268 732 308
+           L732 554
+           Q732 584 710 606
+           L512 784
+           L512 426
+           Z"
+        fill="#FFFFFF"/>
+
+  <!-- subtle ink-blue spine -->
+  <path d="M512 426 L512 784"
+        stroke="#6F919D"
+        stroke-width="12"
+        stroke-linecap="round"/>
+</svg>
