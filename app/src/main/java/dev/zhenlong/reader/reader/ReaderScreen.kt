@@ -2,49 +2,45 @@
 
 package dev.zhenlong.reader.reader
 
-import android.graphics.Color as AndroidColor
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color as AndroidColor
 import android.provider.DocumentsContract
 import android.text.format.DateFormat
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.drag
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.size
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.ui.geometry.Offset
-import dev.zhenlong.reader.ui.PagerFooter
-import dev.zhenlong.reader.ui.verticalPageSwipe
-import java.util.Date
-import kotlin.math.roundToInt
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -70,15 +66,21 @@ import dev.zhenlong.reader.data.ReaderStyle
 import dev.zhenlong.reader.ui.BarIcon
 import dev.zhenlong.reader.ui.BarIconInset
 import dev.zhenlong.reader.ui.OnePx
+import dev.zhenlong.reader.ui.PagerFooter
 import dev.zhenlong.reader.ui.ScreenMargin
+import dev.zhenlong.reader.ui.launchOrToast
+import dev.zhenlong.reader.ui.verticalPageSwipe
+import java.util.Date
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.epub.EpubPreferences
-import org.readium.r2.navigator.epub.css.RsProperties
 import org.readium.r2.navigator.epub.css.Color as CssColor
+import org.readium.r2.navigator.epub.css.RsProperties
 import org.readium.r2.navigator.input.InputListener
 import org.readium.r2.navigator.input.TapEvent
+import org.readium.r2.navigator.preferences.Color as ReadiumColor
 import org.readium.r2.navigator.preferences.ColumnCount
 import org.readium.r2.navigator.preferences.FontFamily
 import org.readium.r2.navigator.preferences.Theme
@@ -87,7 +89,6 @@ import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.indexOfFirstWithHref
 import org.readium.r2.shared.util.AbsoluteUrl
-import org.readium.r2.navigator.preferences.Color as ReadiumColor
 
 private const val NAVIGATOR_TAG = "epub-navigator"
 private val FooterHeight = 22.dp
@@ -335,7 +336,7 @@ private fun ReaderContent(ready: ReaderState.Ready, vm: ReaderViewModel, onMode:
             style = style,
             fonts = fonts,
             panel = c.panel,
-            onPickFontsFolder = { pickFontsFolder.launch(DEFAULT_FONTS_FOLDER) },
+            onPickFontsFolder = { pickFontsFolder.launchOrToast(activity, DEFAULT_FONTS_FOLDER) },
             onBack = exit,
             onStyle = vm::setStyle,
             onPanel = { chrome = Chrome.Bars(it.takeIf { p -> p != c.panel }) },

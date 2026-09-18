@@ -36,6 +36,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.zhenlong.reader.MainActivity
 import dev.zhenlong.reader.data.BookKind
 import dev.zhenlong.reader.reader.text.Spot
+import dev.zhenlong.reader.ui.launchOrToast
 
 private val SwipeThreshold = 48.dp
 
@@ -137,7 +138,7 @@ internal fun NativeTextReader(ready: HostState.Ready, vm: ReaderHostViewModel, o
             fonts = fonts,
             panel = c.panel,
             onPickFontsFolder = {
-                pickFontsFolder.launch(DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Fonts"))
+                pickFontsFolder.launchOrToast(activity, DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Fonts"))
             },
             onBack = exit,
             onStyle = vm::setTextStyle,

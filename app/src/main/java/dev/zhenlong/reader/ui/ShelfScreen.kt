@@ -64,17 +64,16 @@ import dev.zhenlong.reader.data.Book
 import dev.zhenlong.reader.data.ShelfItem
 import dev.zhenlong.reader.scan.ScanState
 import java.io.File
-import kotlin.math.roundToInt
 
 private const val COLUMNS = 4
 private const val MAX_ROWS = 3
 private val BarHeight = 48.dp
 // 全屏共用的左右边距：封面外缘、顶栏图标的字形边缘都落在这条线上
 internal val ScreenMargin = 24.dp
-private val MinColumnGap = 12.dp
+private val ColumnGap = ScreenMargin   // 列间距 = 屏幕边距：封面之间、封面到屏幕边是同一个节奏
 private val GridTopInset = 12.dp      // 顶栏收起时，第一行封面与状态栏之间的留白
 private val MinCoverWidth = 80.dp     // 键盘弹出等矮窗口下，宁可少放一行也不把封面压到看不清
-private val CoverToCaption = 6.dp
+private val CoverToCaption = 8.dp
 private val RowSpacing = 8.dp
 private val TitleLine = 19.sp         // 行高用 sp：跟随系统字号，说明文字不会被固定 dp 裁掉
 private val CountLine = 16.sp
@@ -263,7 +262,7 @@ private fun PagedGrid(
             CoverToCaption + TitleLine.toDp() + if (hasSets) CountLine.toDp() else 0.dp
         }
         val gridHeight = maxHeight - PagerFooterHeight - topInset
-        val widthBound = (maxWidth - ScreenMargin * 2 - MinColumnGap * (COLUMNS - 1)) / COLUMNS
+        val widthBound = (maxWidth - ScreenMargin * 2 - ColumnGap * (COLUMNS - 1)) / COLUMNS
         fun coverWidthFor(rows: Int) = minOf(widthBound, (gridHeight / rows - captionHeight - RowSpacing) / 1.5f)
         val rows = (MAX_ROWS downTo 1).firstOrNull { coverWidthFor(it) >= MinCoverWidth } ?: 1
         val coverWidth = coverWidthFor(rows)
@@ -349,9 +348,8 @@ private fun Cell(item: ShelfItem, coverWidth: Dp, coverHeight: Dp, onClick: () -
 }
 
 /**
- * 封面按自身比例放进 2:3 的槽位，贴左、贴底：一行书的底边和书名落在同一条线上。
- * 1px 描边画在图片自己的边缘上，而不是槽位上——比例对不上时不会出现「框里套着图」的白缝；
- * 深色封面上描边几乎隐形，浅色封面靠它和白底分开。加载完成前什么都不画，不闪空框。
+ * 所有封面统一成 2:3：居中裁切铺满槽位（漫画略高、中文书略宽，各裁掉一点边），一屏封面的边缘和间距才整齐。
+ * 1px 描边压在槽位最外一圈：深色封面上几乎隐形，浅色封面靠它和白底分开。加载完成前什么都不画，不闪空框。
  */
 @Composable
 private fun Cover(path: String, modifier: Modifier) {
@@ -361,23 +359,17 @@ private fun Cover(path: String, modifier: Modifier) {
         contentDescription = null,
         modifier = modifier.drawWithContent {
             drawContent()
-            val image = painter.intrinsicSize
-            if (image.isSpecified && image.width > 0f && image.height > 0f) {
-                // 与 Image 的 Fit + BottomStart 同一套算法和取整，描边才能压在图片最外一圈像素上
-                val scale = minOf(size.width / image.width, size.height / image.height)
-                val w = (image.width * scale).roundToInt().toFloat()
-                val h = (image.height * scale).roundToInt().toFloat()
+            if (painter.intrinsicSize.isSpecified) {
                 val stroke = 1f
                 drawRect(
                     color = Color.Black,
-                    topLeft = Offset(stroke / 2, size.height.roundToInt() - h + stroke / 2),
-                    size = Size(w - stroke, h - stroke),
+                    topLeft = Offset(stroke / 2, stroke / 2),
+                    size = Size(size.width - stroke, size.height - stroke),
                     style = Stroke(stroke),
                 )
             }
         },
-        contentScale = ContentScale.Fit,
-        alignment = Alignment.BottomStart,
+        contentScale = ContentScale.Crop,
     )
 }
 

@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,6 +65,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 fun SettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = viewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val scan by vm.scan.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) vm.setLibraryRoot(uri)
     }
@@ -86,7 +88,7 @@ fun SettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = viewModel()) {
         SettingRow(
             label = "书库文件夹",
             detail = listOfNotNull(s.libraryRootUri?.let(::displayPath) ?: "未选择", scanText).joinToString("\n"),
-            onClick = { pickFolder.launch(s.libraryRootUri?.let(Uri::parse)) },
+            onClick = { pickFolder.launchOrToast(context, s.libraryRootUri?.let(Uri::parse)) },
             action = "重新扫描".takeIf { s.libraryRootUri != null && scan !is ScanState.Running },
             onAction = vm::rescan,
         )
