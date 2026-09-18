@@ -8,13 +8,15 @@
 - Android SDK：`/opt/homebrew/share/android-commandlinetools`（`local.properties`）
 - 真机：墨案 Pantone6，adb 直连。实测是 **Android 14 / API 34**、1072×1448、density 300（≈572×772dp），不是 SPEC 写的 Android 11
 - 设备会休眠，截图前先 `adb shell input keyevent KEYCODE_WAKEUP`
+- 正式签名：`~/.android/shuchao-release.jks`，凭据在根目录 `keystore.properties`（gitignore，备份在 `~/.android/shuchao-keystore.properties`）。
+  没有这个文件 release 退回 debug 签名，和发布版互相装不上。仓库公开在 github.com/zhenlonghe/shuchao，发版 = `git tag -a vX.Y.Z` + `gh release create` 附 APK
 
 ## 命令
 
 ```sh
 ./gradlew :app:testDebugUnitTest          # JVM 单测（ZipReader / OPF 解析 / 排序）
 ./gradlew :app:assembleRelease            # release 用 debug 签名，可直接 adb install -r
-adb install -r app/build/outputs/apk/release/app-release.apk
+adb install -r app/build/outputs/apk/release/app-release.apk   # 首次装正式签名版要先卸载 debug 签名版
 ```
 
 性能指标一律用 **release** 构建测（debug 下 Compose 冷启动 3s+，没有参考价值）。
