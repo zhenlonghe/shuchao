@@ -143,10 +143,19 @@ class ChapterLayout(val chapter: Int, val content: ChapterText, paint: TextPaint
         }
     }
 
-    fun draw(canvas: Canvas, page: Int) {
+    /**
+     * @param emboldenEm 加粗：字形描边、每一笔加宽这么多（em）。描边不改字距，分页不受影响，所以画的时候才定、不用重排；
+     *   任何字体都有效（系统中文字体多半只有一个字重）。正文里本来就粗的（标题、强调）叠加在上面仍然更粗
+     */
+    fun draw(canvas: Canvas, page: Int, emboldenEm: Float = 0f) {
         val p = page.coerceIn(0, pageCount - 1)
         val top = layout.getLineTop(pageStarts[p])
         val bottom = layout.getLineBottom(pageStarts[p + 1] - 1)
+        layout.paint.apply {
+            style = if (emboldenEm > 0f) Paint.Style.FILL_AND_STROKE else Paint.Style.FILL
+            strokeWidth = emboldenEm * textSize
+            strokeJoin = Paint.Join.ROUND   // 笔画尖角处不冒刺
+        }
         canvas.save()
         canvas.translate(0f, topInset(p).toFloat())
         canvas.clipRect(0, 0, layout.width, bottom - top)

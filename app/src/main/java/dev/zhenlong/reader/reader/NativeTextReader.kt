@@ -122,7 +122,7 @@ internal fun NativeTextReader(ready: HostState.Ready, vm: ReaderHostViewModel, o
             Modifier.fillMaxWidth().weight(1f).padding(margins)
                 .onSizeChanged { vm.setTextViewport(it.width, it.height, density.density, density.density * density.fontScale) },
         ) {
-            page?.let { p -> drawIntoCanvas { p.layout.draw(it.nativeCanvas, p.page) } }
+            page?.let { p -> drawIntoCanvas { p.layout.draw(it.nativeCanvas, p.page, style.emboldenEm) } }
         }
         PageFooter(page?.let { PageInfo(it.bookPage, it.bookPages) })
     }

@@ -113,7 +113,7 @@ private const val PAGE_INFO_JS =
     "(function(){var w=window.innerWidth,e=document.scrollingElement;" +
         "return Math.round(Math.abs(e.scrollLeft)/w)+','+Math.round(e.scrollWidth/w);})()"
 
-internal enum class Panel(val label: String) { FONT_SIZE("字号"), FONT("字体"), LINE_HEIGHT("行距"), MARGIN("边距") }
+internal enum class Panel(val label: String) { FONT_SIZE("字号"), FONT("字体"), WEIGHT("粗细"), LINE_HEIGHT("行距"), MARGIN("边距") }
 
 internal sealed interface Chrome {
     data object Hidden : Chrome
@@ -445,6 +445,7 @@ internal fun Bars(
             when (panel) {
                 Panel.FONT_SIZE -> StepSlider(ReaderStyle.FONT_STEPS, style.fontSizeStep) { onStyle(style.copy(fontSizeStep = it)) }
                 Panel.FONT -> FontPanel(style, fonts, onStyle, onPickFontsFolder)
+                Panel.WEIGHT -> StepSlider(ReaderStyle.WEIGHT_STEPS, style.fontWeightStep) { onStyle(style.copy(fontWeightStep = it)) }
                 Panel.LINE_HEIGHT -> StepSlider(ReaderStyle.LINE_STEPS, style.lineHeightStep) { onStyle(style.copy(lineHeightStep = it)) }
                 Panel.MARGIN -> {
                     StepSlider(ReaderStyle.MARGIN_STEPS, style.marginStep, "左右") { onStyle(style.copy(marginStep = it)) }
@@ -456,8 +457,12 @@ internal fun Bars(
             }
             if (panel != null && panel != Panel.FONT) Rule()   // 字体面板自带
             Row(Modifier.fillMaxWidth().height(56.dp)) {
-                // 漫画没有字，字号 / 字体 / 行距不出现
-                val panels = if (mode == BookKind.MANGA) listOf(Panel.MARGIN) else Panel.entries
+                // 漫画没有字，字号 / 字体 / 行距不出现；粗细只有原生引擎能做（Readium 3.3.0 的 fontWeight 是空实现）
+                val panels = when (mode) {
+                    BookKind.MANGA -> listOf(Panel.MARGIN)
+                    BookKind.WEB -> Panel.entries - Panel.WEIGHT
+                    BookKind.TEXT -> Panel.entries
+                }
                 panels.forEach { p -> BarButton(p.label, selected = p == panel) { onPanel(p) } }
                 BarButton("目录", onClick = onToc)
             }

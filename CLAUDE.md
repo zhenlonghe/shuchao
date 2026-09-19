@@ -80,6 +80,11 @@ adb install -r app/build/outputs/apk/release/app-release.apk   # 首次装正式
   章末半页照常顶着上沿；下留白 = 上留白 − 页脚高 + 6dp（`bottomMarginDp`，页脚算进下边距里），原版模式共用
 - 进度存 `locatorJson`，Readium 兼容格式外加 `locations.charOffset`（精确到字）；改字号 / 边距后保持「读到的那个字」不动，而不是页号
 - 正文链接可点（脚注、书内目录），返回键回到来处
+- **粗细**（2026-09-19 用户要求）：工具条「粗细」滑块 7 档，`ReaderStyle.fontWeightStep` → `emboldenEm`（0.01em/档，最高 0.06em ≈ 粗体）。
+  实现是**描边加粗**（`ChapterLayout.draw` 把画笔设成 `FILL_AND_STROKE`、strokeWidth = em × 字号），任何字体都有效（系统中文字体多半只有一个字重，
+  `Typeface.create(weight)` 只能给假粗体、不能分档）；描边不改字距，所以画的时候才设、**不重排**、不进 `TextParams`。
+  「原版」模式不做：Readium 3.3.0 的 `EpubPreferences.fontWeight` 是空实现（`UserProperties` 不输出 `--USER__fontWeight`，自带 ReadiumCSS 也没规则），
+  要做只能靠覆盖 assets 里的 ReadiumCSS-after.css + 每章注入 JS，会多刷一次屏，不值；原版模式的工具条不显示「粗细」
 - 已知取舍：API 34 没有字间两端对齐，中文行尾会有不足一字的参差；表格压成一行一行的文字；竖排、内嵌字体、复杂 CSS 不还原——这类书切「原版」
 - **三种模式**（工具条顶栏「文字 原版 漫画」，`BookKind.WEB` 只出现在 `kindOverride`）：文字 = 原生；原版 = Readium（慢，还原出版商版式）；漫画 = 直读。
   切换时从同一章、同一进度接着读

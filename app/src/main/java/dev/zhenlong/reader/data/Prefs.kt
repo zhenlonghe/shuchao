@@ -15,12 +15,16 @@ data class ReaderStyle(
     val fontSizeStep: Int = DEFAULT_FONT_STEP,
     val font: ReaderFont = ReaderFont.PUBLISHER,
     val customFont: String? = null,          // font == CUSTOM 时：字体文件夹里的文件名
+    val fontWeightStep: Int = 0,
     val lineHeightStep: Int = DEFAULT_LINE_STEP,
     val marginStep: Int = DEFAULT_MARGIN_STEP,
     val verticalMarginStep: Int = DEFAULT_VERTICAL_MARGIN_STEP,
 ) {
     val fontScale: Double get() = FONT_SCALES[fontSizeStep]
     val lineHeight: Double get() = LINE_MIN + lineHeightStep * LINE_STEP_SIZE
+
+    /** 加粗：每一笔加宽多少（em）。0 = 字体原样。 */
+    val emboldenEm: Float get() = fontWeightStep * WEIGHT_STEP_EM
 
     /** Readium 的 pageMargins 倍数（左右边距）。 */
     val pageMargins: Double get() = marginStep * MARGIN_STEP_SIZE
@@ -32,6 +36,10 @@ data class ReaderStyle(
         private val FONT_SCALES = doubleArrayOf(0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.65, 1.8, 2.0, 2.2)
         val FONT_STEPS = FONT_SCALES.size
         const val DEFAULT_FONT_STEP = 2        // 1.0
+
+        // 描边加粗：中文常规体的竖笔约 0.06em、粗体约 0.11em，所以 0.01em 一档、最高 0.06em ≈ 粗体
+        const val WEIGHT_STEP_EM = 0.01f
+        const val WEIGHT_STEPS = 7             // 0 … 0.06em
 
         const val LINE_MIN = 1.0
         const val LINE_STEP_SIZE = 0.1
@@ -71,6 +79,7 @@ class Prefs(private val context: Context) {
         val fontSizeStep = intPreferencesKey("${prefix}fontSizeStep")
         val fontFamily = stringPreferencesKey("${prefix}fontFamily")
         val customFont = stringPreferencesKey("${prefix}customFont")
+        val fontWeightStep = intPreferencesKey("${prefix}fontWeightStep")
         val lineHeightStep = intPreferencesKey("${prefix}lineHeightStep")
         val hMarginStep = intPreferencesKey("${prefix}hMarginStep")
         val verticalMarginStep = intPreferencesKey("${prefix}verticalMarginStep")
@@ -95,6 +104,7 @@ class Prefs(private val context: Context) {
         fontSizeStep = (this[k.fontSizeStep] ?: d.fontSizeStep).coerceIn(0, ReaderStyle.FONT_STEPS - 1),
         font = enumOr(this[k.fontFamily], d.font),
         customFont = this[k.customFont],
+        fontWeightStep = (this[k.fontWeightStep] ?: d.fontWeightStep).coerceIn(0, ReaderStyle.WEIGHT_STEPS - 1),
         lineHeightStep = (this[k.lineHeightStep] ?: d.lineHeightStep).coerceIn(0, ReaderStyle.LINE_STEPS - 1),
         marginStep = (this[k.hMarginStep] ?: legacyMargin ?: d.marginStep).coerceIn(0, ReaderStyle.MARGIN_STEPS - 1),
         verticalMarginStep = (this[k.verticalMarginStep] ?: d.verticalMarginStep).coerceIn(0, ReaderStyle.VERTICAL_MARGIN_STEPS - 1),
@@ -108,6 +118,7 @@ class Prefs(private val context: Context) {
         val k = if (kind == BookKind.MANGA) mangaKeys else textKeys
         it[k.fontSizeStep] = style.fontSizeStep
         it[k.fontFamily] = style.font.name
+        it[k.fontWeightStep] = style.fontWeightStep
         it[k.lineHeightStep] = style.lineHeightStep
         it[k.hMarginStep] = style.marginStep
         it[k.verticalMarginStep] = style.verticalMarginStep
