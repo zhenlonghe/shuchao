@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
@@ -71,12 +73,12 @@ private val BarHeight = 48.dp
 // 全屏共用的左右边距：封面外缘、顶栏图标的字形边缘都落在这条线上
 internal val ScreenMargin = 24.dp
 private val ColumnGap = ScreenMargin   // 列间距 = 屏幕边距：封面之间、封面到屏幕边是同一个节奏
-private val GridTopInset = 12.dp      // 顶栏收起时，第一行封面与状态栏之间的留白
 private val MinCoverWidth = 80.dp     // 键盘弹出等矮窗口下，宁可少放一行也不把封面压到看不清
 private val CoverToCaption = 8.dp
-private val RowSpacing = 8.dp
+private val MinRowGap = 8.dp          // 行间（以及网格上下）留白的下限；通常远大于此，见 PagedGrid
 private val TitleLine = 19.sp         // 行高用 sp：跟随系统字号，说明文字不会被固定 dp 裁掉
-private val CountLine = 16.sp
+private val BadgeSize = 20.dp
+private val BadgeInset = 6.dp
 
 @Composable
 fun ShelfScreen(
@@ -125,7 +127,6 @@ fun ShelfScreen(
                 PagedGrid(
                     items = ui.items,
                     page = ui.page,
-                    topInset = if (barHidden) GridTopInset else 0.dp,
                     footerLabel = ui.seriesName.takeIf { barHidden },   // 没有顶栏时，靠页脚知道自己在哪一套里
                     onPage = vm::setPage,
                     onPullDownAtTop = { if (barHidden) barRevealed = true },
@@ -249,29 +250,30 @@ private fun CenterText(text: String, onClick: (() -> Unit)? = null) {
 private fun PagedGrid(
     items: List<ShelfItem>,
     page: Int,
-    topInset: Dp,
     footerLabel: String?,
     onPage: (Int) -> Unit,
     onPullDownAtTop: () -> Unit,
     onClick: (ShelfItem) -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        // 「共 N 本」那一行只在列表里真有成套的条目时才留位置：一套内部全是单本，省下来的高度给封面
-        val hasSets = remember(items) { items.any { it is ShelfItem.Set } }
-        val captionHeight = with(LocalDensity.current) {
-            CoverToCaption + TitleLine.toDp() + if (hasSets) CountLine.toDp() else 0.dp
-        }
-        val gridHeight = maxHeight - PagerFooterHeight - topInset
+        val captionHeight = with(LocalDensity.current) { CoverToCaption + TitleLine.toDp() }
         val widthBound = (maxWidth - ScreenMargin * 2 - ColumnGap * (COLUMNS - 1)) / COLUMNS
-        fun coverWidthFor(rows: Int) = minOf(widthBound, (gridHeight / rows - captionHeight - RowSpacing) / 1.5f)
+        // 行数、封面尺寸按「页脚在」算（页脚要不要，得先知道一屏放几本）
+        val heightBudget = maxHeight - PagerFooterHeight
+        fun coverWidthFor(rows: Int) =
+            minOf(widthBound, (heightBudget - MinRowGap * (rows + 1) - captionHeight * rows) / (1.5f * rows))
         val rows = (MAX_ROWS downTo 1).firstOrNull { coverWidthFor(it) >= MinCoverWidth } ?: 1
         val coverWidth = coverWidthFor(rows)
         val coverHeight = coverWidth * 1.5f
-        val rowHeight = gridHeight / rows   // 余量均摊到行间，而不是全堆在最后一行下面
 
         val perPage = rows * COLUMNS
         val pageCount = (items.size + perPage - 1) / perPage
         val current = page.coerceIn(0, pageCount - 1)
+        // 页脚只在有东西可显示（页码 / 套名）时才占位；只有一屏时那 44dp 空着，书架会显得偏上
+        val footerShown = pageCount > 1 || footerLabel != null
+        val gridHeight = if (footerShown) heightBudget else maxHeight
+        // 封面通常是宽度顶满、高度有余：余量均分到网格上方、行间、下方这 rows + 1 段，上下留白才一样宽
+        val gap = (gridHeight - (coverHeight + captionHeight) * rows) / (rows + 1)
         val go = { delta: Int ->
             val target = current + delta
             when {
@@ -293,15 +295,15 @@ private fun PagedGrid(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(top = topInset)
-                    .height(gridHeight)
-                    .padding(horizontal = ScreenMargin)
-                    .verticalPageSwipe(current, pageCount) { go(it) },
+                    .weight(1f)
+                    .verticalPageSwipe(current, pageCount) { go(it) }   // 留白处也能滑
+                    .padding(start = ScreenMargin, end = ScreenMargin, top = gap),
+                verticalArrangement = Arrangement.spacedBy(gap),
             ) {
                 val start = current * perPage
                 for (r in 0 until rows) {
                     // 空位也占格：不满一行时封面仍然贴左按列对齐
-                    Row(Modifier.fillMaxWidth().height(rowHeight), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         for (c in 0 until COLUMNS) {
                             val item = items.getOrNull(start + r * COLUMNS + c)
                             if (item != null) Cell(item, coverWidth, coverHeight) { onClick(item) }
@@ -310,7 +312,7 @@ private fun PagedGrid(
                     }
                 }
             }
-            PagerFooter(current, pageCount, footerLabel) { go(it) }
+            if (footerShown) PagerFooter(current, pageCount, footerLabel) { go(it) }
         }
     }
 }
@@ -318,21 +320,24 @@ private fun PagedGrid(
 @Composable
 private fun Cell(item: ShelfItem, coverWidth: Dp, coverHeight: Dp, onClick: () -> Unit) {
     Column(Modifier.width(coverWidth).clickable(onClick = onClick)) {
-        val path = item.coverPath
-        if (path != null) {
-            Cover(path, Modifier.size(coverWidth, coverHeight))
-        } else {
-            // 占位封面：白底黑字书名，像一张只有字的素封面
-            Box(Modifier.size(coverWidth, coverHeight).border(OnePx, Color.Black)) {
-                Text(
-                    item.title,
-                    Modifier.padding(10.dp),
-                    fontSize = 13.sp,
-                    lineHeight = TitleLine,
-                    maxLines = 6,
-                    overflow = TextOverflow.Ellipsis,
-                )
+        Box(Modifier.size(coverWidth, coverHeight)) {
+            val path = item.coverPath
+            if (path != null) {
+                Cover(path, Modifier.fillMaxSize())
+            } else {
+                // 占位封面：白底黑字书名，像一张只有字的素封面
+                Box(Modifier.fillMaxSize().border(OnePx, Color.Black)) {
+                    Text(
+                        item.title,
+                        Modifier.padding(10.dp),
+                        fontSize = 13.sp,
+                        lineHeight = TitleLine,
+                        maxLines = 6,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
+            if (item is ShelfItem.Set) CountBadge(item.count, Modifier.align(Alignment.TopEnd).padding(BadgeInset))
         }
         // 中间省略：同一套的书名前缀相同、区别在末尾（「… - 卷01」），尾部省略会让一整屏看起来一模一样
         Text(
@@ -343,7 +348,21 @@ private fun Cell(item: ShelfItem, coverWidth: Dp, coverHeight: Dp, onClick: () -
             maxLines = 1,
             overflow = TextOverflow.MiddleEllipsis,
         )
-        if (item is ShelfItem.Set) Text("共 ${item.count} 本", fontSize = 11.sp, lineHeight = CountLine, maxLines = 1)
+    }
+}
+
+/** 成套条目的册数：封面右上角一枚白底黑边的圆形角标，在深浅封面上都看得清；三位数会拉成胶囊。 */
+@Composable
+private fun CountBadge(count: Int, modifier: Modifier) {
+    Box(
+        modifier
+            .defaultMinSize(BadgeSize, BadgeSize)
+            .background(Color.White, CircleShape)
+            .border(OnePx, Color.Black, CircleShape)
+            .padding(horizontal = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("$count", fontSize = 11.sp, lineHeight = 11.sp, maxLines = 1)
     }
 }
 
