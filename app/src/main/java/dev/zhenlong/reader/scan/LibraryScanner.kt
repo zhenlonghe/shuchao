@@ -210,6 +210,7 @@ class LibraryScanner(private val context: Context, private val dao: LibraryDao) 
             pageIndex = old?.pageIndex,
             pageCount = null,
             lastOpenedAt = old?.lastOpenedAt,
+            progress = old?.progress,
         )
     }
 

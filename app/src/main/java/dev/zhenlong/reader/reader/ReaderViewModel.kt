@@ -127,8 +127,12 @@ class ReaderViewModel(app: Application, savedState: SavedStateHandle) : AndroidV
         pendingLocator = null
         saveJob?.cancel()
         val json = locator.toJSON().toString()
-        val chapter = (_state.value as? ReaderState.Ready)?.publication?.readingOrder?.indexOfFirstWithHref(locator.href)
-        reader.launch { dao.saveLocator(bookId, json, chapter, System.currentTimeMillis()) }
+        val readingOrder = (_state.value as? ReaderState.Ready)?.publication?.readingOrder
+        val chapter = readingOrder?.indexOfFirstWithHref(locator.href)
+        // 全书进度（书架「最近阅读」显示）：Readium 算好的 totalProgression；没有就按「第几章 + 章内进度」粗估
+        val progress = locator.locations.totalProgression?.toFloat()
+            ?: chapter?.takeIf { it >= 0 }?.let { c -> ((c + (locator.locations.progression ?: 0.0)) / readingOrder.size).toFloat() }
+        reader.launch { dao.saveLocator(bookId, json, chapter, System.currentTimeMillis(), progress) }
     }
 
     fun setStyle(style: ReaderStyle) {

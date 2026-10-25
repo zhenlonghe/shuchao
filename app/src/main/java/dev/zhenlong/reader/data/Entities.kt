@@ -35,4 +35,5 @@ data class Book(
     val pageIndex: Int?,              // MANGA 进度
     val pageCount: Int?,              // MANGA 总页
     val lastOpenedAt: Long?,
+    val progress: Float? = null,      // 全书读到几成（0–1），书架「最近阅读」行显示用；文字书是估算（PageEstimator）
 )

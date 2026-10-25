@@ -64,6 +64,7 @@ import coil.size.Size as CoilSize
 import dev.zhenlong.reader.R
 import dev.zhenlong.reader.data.Book
 import dev.zhenlong.reader.data.ShelfItem
+import dev.zhenlong.reader.data.progressLabel
 import dev.zhenlong.reader.scan.ScanState
 import java.io.File
 
@@ -75,10 +76,15 @@ internal val ScreenMargin = 24.dp
 private val ColumnGap = ScreenMargin   // 列间距 = 屏幕边距：封面之间、封面到屏幕边是同一个节奏
 private val MinCoverWidth = 80.dp     // 键盘弹出等矮窗口下，宁可少放一行也不把封面压到看不清
 private val CoverToCaption = 8.dp
-private val MinRowGap = 8.dp          // 行间（以及网格上下）留白的下限；通常远大于此，见 PagedGrid
+private val MinRowGap = 12.dp         // 行间（以及网格上下）留白的下限；通常远大于此，见 PagedGrid
 private val TitleLine = 19.sp         // 行高用 sp：跟随系统字号，说明文字不会被固定 dp 裁掉
-private val BadgeSize = 20.dp
-private val BadgeInset = 6.dp
+private val SectionTitleLine = 20.sp  // 分区标题「最近阅读 / 我的书架」
+private val SectionAboveTitle = 16.dp  // 标题上方在均分留白之外再多空一段：标题要离上一区远、离自己这一区近
+private val SectionTitleToRule = 6.dp
+private val SectionRuleToCovers = 12.dp
+private val BadgeSize = 26.dp         // 封面宽约 112dp，角标占不到 1/4；再小就像个污点
+private val BadgeInset = 8.dp
+private val CaptionGray = Color(0xFF5A5A5A)   // 说明文字压淡一档：封面是主角，黑字会和封面抢眼。16 级灰下仍清楚
 
 @Composable
 fun ShelfScreen(
@@ -87,10 +93,12 @@ fun ShelfScreen(
     vm: ShelfViewModel = viewModel(),
 ) {
     val ui = vm.ui.collectAsStateWithLifecycle().value
+    val freshRecent = vm.recent.collectAsStateWithLifecycle().value
     // logcat「Fully drawn」= 冷启动到书架内容出现的耗时（SPEC §9）
     ReportDrawnWhen { ui != null }
     // 书库还没备好：连白底都不画（窗口是透明的，见 themes.xml），不给墨水屏一次空白刷新
     if (ui == null) return
+    val recent = freshRecent ?: ui.recent
     val scan = ui.scan
     val message: Pair<String, (() -> Unit)?>? = when {
         scan is ScanState.Running -> (if (scan.total > 0) "正在扫描 ${scan.done}/${scan.total}" else "正在扫描") to null
@@ -126,6 +134,8 @@ fun ShelfScreen(
             } else {
                 PagedGrid(
                     items = ui.items,
+                    // 顶层书架首屏的第一行是最近读过的几本，第二行起才是书架本身
+                    pinned = if (ui.seriesName == null && ui.query == null) recent.map { ShelfItem.Single(it) } else emptyList(),
                     page = ui.page,
                     footerLabel = ui.seriesName.takeIf { barHidden },   // 没有顶栏时，靠页脚知道自己在哪一套里
                     onPage = vm::setPage,
@@ -245,10 +255,14 @@ private fun CenterText(text: String, onClick: (() -> Unit)? = null) {
     }
 }
 
-/** 整屏分页网格（4 列 × 3 行）：不滚动，上下滑或点页脚左/右半翻屏，瞬切（SPEC §2.6）。 */
+/**
+ * 整屏分页网格（4 列 × 3 行）：不滚动，上下滑或点页脚左/右半翻屏，瞬切（SPEC §2.6）。
+ * [pinned] 非空时占首屏第一行（最多一行），[items] 从首屏第二行接着排。
+ */
 @Composable
 private fun PagedGrid(
     items: List<ShelfItem>,
+    pinned: List<ShelfItem>,
     page: Int,
     footerLabel: String?,
     onPage: (Int) -> Unit,
@@ -256,24 +270,38 @@ private fun PagedGrid(
     onClick: (ShelfItem) -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val captionHeight = with(LocalDensity.current) { CoverToCaption + TitleLine.toDp() }
+        val density = LocalDensity.current
+        val captionHeight = with(density) { CoverToCaption + TitleLine.toDp() }
+        val sectionHeight =
+            SectionAboveTitle + with(density) { SectionTitleLine.toDp() } + SectionTitleToRule + OnePx + SectionRuleToCovers
+        // 有最近阅读时，首屏分两区，各带一个标题。封面尺寸按「首屏两个标题」算，所有屏一样大，翻屏时封面不跳
+        val sections = if (pinned.isNotEmpty()) 2 else 0
         val widthBound = (maxWidth - ScreenMargin * 2 - ColumnGap * (COLUMNS - 1)) / COLUMNS
         // 行数、封面尺寸按「页脚在」算（页脚要不要，得先知道一屏放几本）
         val heightBudget = maxHeight - PagerFooterHeight
-        fun coverWidthFor(rows: Int) =
-            minOf(widthBound, (heightBudget - MinRowGap * (rows + 1) - captionHeight * rows) / (1.5f * rows))
+        fun coverWidthFor(rows: Int) = minOf(
+            widthBound,
+            (heightBudget - sectionHeight * sections - MinRowGap * (rows + 1) - captionHeight * rows) / (1.5f * rows),
+        )
         val rows = (MAX_ROWS downTo 1).firstOrNull { coverWidthFor(it) >= MinCoverWidth } ?: 1
         val coverWidth = coverWidthFor(rows)
         val coverHeight = coverWidth * 1.5f
 
         val perPage = rows * COLUMNS
-        val pageCount = (items.size + perPage - 1) / perPage
+        // 只有一行（矮窗口）时不置顶：否则首屏一本书架上的书都看不到
+        val pinnedRow = pinned.take(COLUMNS).takeIf { rows > 1 }.orEmpty()
+        val pages = GridPages(items.size, perPage, firstPage = if (pinnedRow.isEmpty()) perPage else perPage - COLUMNS)
+        val pageCount = pages.count
         val current = page.coerceIn(0, pageCount - 1)
         // 页脚只在有东西可显示（页码 / 套名）时才占位；只有一屏时那 44dp 空着，书架会显得偏上
         val footerShown = pageCount > 1 || footerLabel != null
         val gridHeight = if (footerShown) heightBudget else maxHeight
-        // 封面通常是宽度顶满、高度有余：余量均分到网格上方、行间、下方这 rows + 1 段，上下留白才一样宽
-        val gap = (gridHeight - (coverHeight + captionHeight) * rows) / (rows + 1)
+        // 首屏有最近一行时：「最近阅读」标题 + 一行最近 + 「我的书架」标题 + 其余几行书架
+        val pinnedRows = if (current == 0 && pinnedRow.isNotEmpty()) 1 else 0
+        val titles = pinnedRows * 2
+        // 封面通常是宽度顶满、高度有余：余量均分到网格上方、行间、下方这 rows + 1 段，上下留白才一样宽。
+        // 标题贴着自己那一区，不参与均分
+        val gap = (gridHeight - (coverHeight + captionHeight) * rows - sectionHeight * titles) / (rows + 1)
         val go = { delta: Int ->
             val target = current + delta
             when {
@@ -284,10 +312,8 @@ private fun PagedGrid(
 
         // 相邻两屏的封面提前进内存缓存，翻屏时首帧就是完整画面，不会先空框再补图
         val context = LocalContext.current
-        LaunchedEffect(items, current, perPage) {
-            val next = (current + 1) * perPage until (current + 2) * perPage
-            val previous = (current - 1) * perPage until current * perPage
-            (next + previous).mapNotNull { items.getOrNull(it)?.coverPath }
+        LaunchedEffect(items, current, pages) {
+            (pages.range(current + 1) + pages.range(current - 1)).mapNotNull { items.getOrNull(it)?.coverPath }
                 .forEach { context.imageLoader.enqueue(coverRequest(context, it)) }
         }
 
@@ -298,15 +324,22 @@ private fun PagedGrid(
                     .weight(1f)
                     .verticalPageSwipe(current, pageCount) { go(it) }   // 留白处也能滑
                     .padding(start = ScreenMargin, end = ScreenMargin, top = gap),
-                verticalArrangement = Arrangement.spacedBy(gap),
             ) {
-                val start = current * perPage
+                val start = pages.range(current).first
                 for (r in 0 until rows) {
+                    if (r > 0) Spacer(Modifier.height(gap))
+                    if (pinnedRows > 0 && r == 0) SectionTitle("最近阅读")
+                    if (pinnedRows > 0 && r == pinnedRows) SectionTitle("我的书架")
                     // 空位也占格：不满一行时封面仍然贴左按列对齐
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         for (c in 0 until COLUMNS) {
-                            val item = items.getOrNull(start + r * COLUMNS + c)
-                            if (item != null) Cell(item, coverWidth, coverHeight) { onClick(item) }
+                            val item = if (r < pinnedRows) pinnedRow.getOrNull(c)
+                                else items.getOrNull(start + (r - pinnedRows) * COLUMNS + c)
+                            if (item != null) {
+                                // 最近一行写读到几成而不是书名（没存过进度的旧书退回书名）
+                                val caption = if (r < pinnedRows) (item as? ShelfItem.Single)?.book?.progress?.let(::progressLabel) ?: item.title else item.title
+                                Cell(item, caption, coverWidth, coverHeight) { onClick(item) }
+                            }
                             else Spacer(Modifier.width(coverWidth))
                         }
                     }
@@ -317,8 +350,18 @@ private fun PagedGrid(
     }
 }
 
+/** 分区标题：左上一行字，下面一条贯穿版心的细线。 */
 @Composable
-private fun Cell(item: ShelfItem, coverWidth: Dp, coverHeight: Dp, onClick: () -> Unit) {
+private fun SectionTitle(text: String) {
+    Column(Modifier.fillMaxWidth().padding(top = SectionAboveTitle, bottom = SectionRuleToCovers)) {
+        Text(text, fontSize = 14.sp, lineHeight = SectionTitleLine, maxLines = 1)
+        Spacer(Modifier.height(SectionTitleToRule))
+        Box(Modifier.fillMaxWidth().height(OnePx).background(Color.Black))
+    }
+}
+
+@Composable
+private fun Cell(item: ShelfItem, caption: String, coverWidth: Dp, coverHeight: Dp, onClick: () -> Unit) {
     Column(Modifier.width(coverWidth).clickable(onClick = onClick)) {
         Box(Modifier.size(coverWidth, coverHeight)) {
             val path = item.coverPath
@@ -341,8 +384,9 @@ private fun Cell(item: ShelfItem, coverWidth: Dp, coverHeight: Dp, onClick: () -
         }
         // 中间省略：同一套的书名前缀相同、区别在末尾（「… - 卷01」），尾部省略会让一整屏看起来一模一样
         Text(
-            item.title,
+            caption,
             Modifier.padding(top = CoverToCaption),
+            color = CaptionGray,
             fontSize = 13.sp,
             lineHeight = TitleLine,
             maxLines = 1,
@@ -359,10 +403,10 @@ private fun CountBadge(count: Int, modifier: Modifier) {
             .defaultMinSize(BadgeSize, BadgeSize)
             .background(Color.White, CircleShape)
             .border(OnePx, Color.Black, CircleShape)
-            .padding(horizontal = 5.dp),
+            .padding(horizontal = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text("$count", fontSize = 11.sp, lineHeight = 11.sp, maxLines = 1)
+        Text("$count", fontSize = 12.sp, lineHeight = 12.sp, maxLines = 1)
     }
 }
 

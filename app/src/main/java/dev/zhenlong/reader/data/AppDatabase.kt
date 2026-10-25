@@ -8,6 +8,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
 import androidx.room.Upsert
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -21,15 +23,20 @@ interface LibraryDao {
     @Query("SELECT * FROM Book")
     suspend fun allBooks(): List<Book>
 
+    /** 书架首行「最近阅读」。lastOpenedAt 每翻一页都会更新，所以就是「最近读过」的顺序。 */
+    @Query("SELECT * FROM Book WHERE lastOpenedAt IS NOT NULL ORDER BY lastOpenedAt DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<Book>>
+
     @Query("SELECT * FROM Book WHERE id = :id")
     suspend fun book(id: String): Book?
 
     /** 两种阅读器都同时写 locatorJson 和 pageIndex（章节序号）：切换模式后能从差不多的位置接着读。 */
-    @Query("UPDATE Book SET locatorJson = :locatorJson, pageIndex = :pageIndex, lastOpenedAt = :now WHERE id = :id")
-    suspend fun saveLocator(id: String, locatorJson: String, pageIndex: Int?, now: Long)
+    // progress 传 null = 这次算不出来，保留上次的值
+    @Query("UPDATE Book SET locatorJson = :locatorJson, pageIndex = :pageIndex, lastOpenedAt = :now, progress = COALESCE(:progress, progress) WHERE id = :id")
+    suspend fun saveLocator(id: String, locatorJson: String, pageIndex: Int?, now: Long, progress: Float?)
 
-    @Query("UPDATE Book SET pageIndex = :pageIndex, pageCount = :pageCount, locatorJson = :locatorJson, lastOpenedAt = :now WHERE id = :id")
-    suspend fun saveMangaProgress(id: String, pageIndex: Int, pageCount: Int, locatorJson: String, now: Long)
+    @Query("UPDATE Book SET pageIndex = :pageIndex, pageCount = :pageCount, locatorJson = :locatorJson, lastOpenedAt = :now, progress = COALESCE(:progress, progress) WHERE id = :id")
+    suspend fun saveMangaProgress(id: String, pageIndex: Int, pageCount: Int, locatorJson: String, now: Long, progress: Float?)
 
     @Query("UPDATE Book SET kind = :kind WHERE id = :id")
     suspend fun saveKind(id: String, kind: BookKind)
@@ -67,12 +74,19 @@ interface LibraryDao {
     }
 }
 
-@Database(entities = [Book::class, Series::class], version = 1, exportSchema = false)
+@Database(entities = [Book::class, Series::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): LibraryDao
 
     companion object {
+        /** v2：Book 加 progress 列。只能加列不能重建：Book 里有阅读进度，不能靠重扫找回来。 */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE Book ADD COLUMN progress REAL")
+            }
+        }
+
         fun open(context: Context): AppDatabase =
-            Room.databaseBuilder(context, AppDatabase::class.java, "library.db").build()
+            Room.databaseBuilder(context, AppDatabase::class.java, "library.db").addMigrations(MIGRATION_1_2).build()
     }
 }

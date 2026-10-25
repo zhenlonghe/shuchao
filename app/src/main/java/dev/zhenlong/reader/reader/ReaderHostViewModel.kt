@@ -290,13 +290,23 @@ class ReaderHostViewModel(app: Application, savedState: SavedStateHandle) : Andr
         }
     }
 
-    /** 当前模式下要存的进度：(章节序号, Readium 也认识的位置 JSON, 漫画总页数)。「原版」模式的进度由 [ReaderViewModel] 自己存。 */
-    private fun progress(): Triple<Int, String, Int?>? {
+    /** 要存的进度：章节序号、Readium 也认识的位置 JSON、漫画总页数（文字书为 null）、全书读到几成（书架显示用）。 */
+    private class Progress(val chapter: Int, val json: String, val mangaPages: Int?, val fraction: Float)
+
+    /** 当前模式下要存的进度。「原版」模式的进度由 [ReaderViewModel] 自己存。 */
+    private fun progress(): Progress? {
         val ready = _state.value as? HostState.Ready ?: return null
         return when (_mode.value) {
-            BookKind.MANGA -> _page.value?.index?.let { Triple(it, locatorJson(ready, it, 0.0, null), ready.manga.pageCount) }
+            BookKind.MANGA -> _page.value?.index?.let { i ->
+                Progress(i, locatorJson(ready, i, 0.0, null), ready.manga.pageCount, (i + 1f) / ready.manga.pageCount.coerceAtLeast(1))
+            }
             BookKind.TEXT -> ready.text.page.value?.let { p ->
-                Triple(p.chapter, locatorJson(ready, p.chapter, p.offset.toDouble() / p.chapterLength.coerceAtLeast(1), p.offset), null)
+                Progress(
+                    p.chapter,
+                    locatorJson(ready, p.chapter, p.offset.toDouble() / p.chapterLength.coerceAtLeast(1), p.offset),
+                    null,
+                    p.bookPage.toFloat() / p.bookPages.coerceAtLeast(1),   // 估算页码，随阅读校准
+                )
             }
             BookKind.WEB -> null
         }
@@ -313,10 +323,10 @@ class ReaderHostViewModel(app: Application, savedState: SavedStateHandle) : Andr
             .toString()
     }
 
-    private suspend fun save(p: Triple<Int, String, Int?>) {
-        val (chapter, json, mangaPages) = p
+    private suspend fun save(p: Progress) {
         val now = System.currentTimeMillis()
-        if (mangaPages != null) dao.saveMangaProgress(bookId, chapter, mangaPages, json, now) else dao.saveLocator(bookId, json, chapter, now)
+        if (p.mangaPages != null) dao.saveMangaProgress(bookId, p.chapter, p.mangaPages, p.json, now, p.fraction)
+        else dao.saveLocator(bookId, p.json, p.chapter, now, p.fraction)
     }
 
     private suspend fun saveNow() {
