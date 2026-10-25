@@ -22,21 +22,6 @@ import androidx.compose.ui.unit.sp
 internal val PagerFooterHeight = 44.dp
 private val SwipeThreshold = 48.dp
 
-/**
- * 网格分屏：首屏可以比其他屏少放（书架首屏第一行让给「最近阅读」），之后每屏 [perPage] 个。
- * 至少 1 屏。
- */
-internal data class GridPages(val itemCount: Int, val perPage: Int, val firstPage: Int = perPage) {
-    val count = if (itemCount <= firstPage) 1 else 1 + (itemCount - firstPage + perPage - 1) / perPage
-
-    /** 第 [page] 屏对应的条目下标（可能越过末尾，按空位处理）。 */
-    fun range(page: Int): IntRange = when {
-        page < 0 -> IntRange.EMPTY
-        page == 0 -> 0 until firstPage
-        else -> (firstPage + (page - 1) * perPage).let { it until it + perPage }
-    }
-}
-
 /** [onTurn]：+1 下一屏，-1 上一屏。 */
 internal fun Modifier.verticalPageSwipe(vararg keys: Any?, onTurn: (Int) -> Unit): Modifier =
     pointerInput(*keys) {

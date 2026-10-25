@@ -37,3 +37,11 @@ data class Book(
     val lastOpenedAt: Long?,
     val progress: Float? = null,      // 全书读到几成（0–1），书架「最近阅读」行显示用；文字书是估算（PageEstimator）
 )
+
+/** 读过的一本书的阅读状态（Book 的几列）：书架的排序和进度条只看这个，读书时常驻订阅，比整个书库轻得多。 */
+data class ReadState(
+    val id: String,
+    val seriesId: String?,
+    val lastOpenedAt: Long,
+    val progress: Float?,
+)

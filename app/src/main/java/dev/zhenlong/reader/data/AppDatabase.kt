@@ -23,9 +23,9 @@ interface LibraryDao {
     @Query("SELECT * FROM Book")
     suspend fun allBooks(): List<Book>
 
-    /** 书架首行「最近阅读」。lastOpenedAt 每翻一页都会更新，所以就是「最近读过」的顺序。 */
-    @Query("SELECT * FROM Book WHERE lastOpenedAt IS NOT NULL ORDER BY lastOpenedAt DESC LIMIT :limit")
-    fun observeRecent(limit: Int): Flow<List<Book>>
+    /** 读过的书：书架按它排序、画进度条。lastOpenedAt 每翻一页都会更新，所以就是「最近读过」的顺序。 */
+    @Query("SELECT id, seriesId, lastOpenedAt, progress FROM Book WHERE lastOpenedAt IS NOT NULL")
+    fun observeReadStates(): Flow<List<ReadState>>
 
     @Query("SELECT * FROM Book WHERE id = :id")
     suspend fun book(id: String): Book?

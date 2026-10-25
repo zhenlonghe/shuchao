@@ -3,10 +3,10 @@ package dev.zhenlong.reader
 import android.app.Application
 import android.net.Uri
 import dev.zhenlong.reader.data.AppDatabase
-import dev.zhenlong.reader.data.Book
 import dev.zhenlong.reader.data.Library
 import dev.zhenlong.reader.data.Prefs
-import dev.zhenlong.reader.data.RECENT_COUNT
+import dev.zhenlong.reader.data.ReadState
+import dev.zhenlong.reader.data.arrangeByRecent
 import dev.zhenlong.reader.data.Settings
 import coil.imageLoader
 import dev.zhenlong.reader.scan.LibraryScanner
@@ -20,12 +20,12 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -45,13 +45,12 @@ class ReaderApp : Application() {
     lateinit var settings: StateFlow<Settings?>
         private set
     /**
-     * 最近读过的几本（书架首屏第一行）。null = 还没开始，书架先用 [Library.recent]。
+     * 读过的书（id → 阅读状态）：书架的顺序和进度条看它。null = 还没开始，书架先用 [Library.reads]。
      * 和 [library] 不同，这条是常驻订阅：library 在阅读时停掉、回书架时首帧是旧值，
-     * 如果最近一行也跟着它走，回到书架会先画旧顺序再换新顺序，墨水屏刷两次。
-     * 每翻一页只多一次 LIMIT 4 的小查询；书的顺序 / 封面没变就不往下发。
-     * 等书库加载完才开始查：冷启动时不和书库抢 CPU，首帧用书库里算好的那份就够了。
+     * 如果顺序也跟着它走，回到书架会先画旧顺序再换新顺序，墨水屏刷两次。
+     * 每次存进度只多一次只取四列的小查询；等书库加载完才开始，冷启动时不和书库抢 CPU。
      */
-    lateinit var recent: StateFlow<List<Book>?>
+    lateinit var reads: StateFlow<Map<String, ReadState>?>
         private set
 
     override fun onCreate() {
@@ -60,31 +59,33 @@ class ReaderApp : Application() {
         // WhileSubscribed：阅读时书架不在前台，翻页写进度不会触发整库重排；
         // 先挂一个一次性订阅把加载提前到此刻，5s 内书架会接上
         library = combine(db.dao().observeBooks(), db.dao().observeSeries(), ::Library)
-            .onEach(::preloadFirstScreen)
+            .onEach { preloadCovers(firstScreenCovers(it, it.reads)) }
             .flowOn(Dispatchers.Default)
             .stateIn(appScope, SharingStarted.WhileSubscribed(5_000), null)
         appScope.launch { library.first { it != null } }
-        recent = flow {
+        reads = flow {
             library.first { it != null }
-            emitAll(db.dao().observeRecent(RECENT_COUNT))
+            emitAll(db.dao().observeReadStates())
         }
-            // 键里带 progress：同一本书接着读、顺序没变时，封面下的「读到 N%」也要跟着变
-            .distinctUntilChangedBy { books -> books.map { listOf(it.id, it.title, it.coverPath, it.progress) } }
-            .onEach { books -> preloadCovers(books.mapNotNull { it.coverPath }) }
+            .map { states -> states.associateBy { it.id } }
+            // 读完回书架时，新排到首屏的封面已在内存里。每存一次进度都会走到这里，首屏没变就跳过
+            .onEach { reads ->
+                val paths = library.value?.let { firstScreenCovers(it, reads) } ?: return@onEach
+                if (paths != preloadedFirstScreen) preloadCovers(paths).also { preloadedFirstScreen = paths }
+            }
             .flowOn(Dispatchers.Default)
             .stateIn(appScope, SharingStarted.Eagerly, null)
         settings = prefs.settings.flowOn(Dispatchers.IO).stateIn(appScope, SharingStarted.Eagerly, null)
     }
 
+    private var preloadedFirstScreen: List<String>? = null   // 只在 reads 那条流（Dispatchers.Default 上串行）里读写
+
     /**
-     * 书架首屏的封面先进内存缓存，再把书库交给界面：首帧就是带封面的完整书架，
+     * 书架首屏的封面：先进内存缓存，再把书库交给界面，首帧就是带封面的完整书架，
      * 而不是先出文字、下一帧再补图（墨水屏上是两次刷新）。
      */
-    private suspend fun preloadFirstScreen(library: Library) {
-        // 读过书时首屏第一行是最近阅读，书架只露出前 8 本
-        val shown = if (library.recent.isEmpty()) FIRST_SCREEN_ITEMS else FIRST_SCREEN_ITEMS - RECENT_COUNT
-        preloadCovers(library.recent.mapNotNull { it.coverPath } + library.top.take(shown).mapNotNull { it.coverPath })
-    }
+    private fun firstScreenCovers(library: Library, reads: Map<String, ReadState>): List<String> =
+        arrangeByRecent(library.top, reads).take(FIRST_SCREEN_ITEMS).mapNotNull { it.coverPath }
 
     private suspend fun preloadCovers(paths: List<String>) = coroutineScope {
         paths.map { path -> async { imageLoader.execute(coverRequest(this@ReaderApp, path)) } }.awaitAll()

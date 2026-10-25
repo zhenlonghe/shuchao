@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import dev.zhenlong.reader.ReaderApp
 import dev.zhenlong.reader.data.Book
 import dev.zhenlong.reader.data.Library
+import dev.zhenlong.reader.data.ReadState
 import dev.zhenlong.reader.data.Settings
 import dev.zhenlong.reader.data.ShelfItem
 import dev.zhenlong.reader.scan.ScanState
@@ -25,7 +26,7 @@ data class ShelfUi(
     val seriesName: String?,      // 非 null = 正在一套里
     val query: String?,           // 非 null = 搜索中
     val items: List<ShelfItem>,
-    val recent: List<Book>,       // 书库快照里的最近阅读；ShelfViewModel.recent 有值时以它为准
+    val reads: Map<String, ReadState>,   // 书库快照里的阅读状态；ShelfViewModel.reads 有值时以它为准
     val page: Int,
 )
 
@@ -42,8 +43,8 @@ class ShelfViewModel(app: Application) : AndroidViewModel(app) {
 
     private val nav = MutableStateFlow(Nav())
 
-    /** 最近读过的几本：只在顶层书架首屏显示。ReaderApp 的常驻流，回到书架时首帧就是新顺序；null 时用 [ShelfUi.recent]。 */
-    val recent: StateFlow<List<Book>?> = reader.recent
+    /** 读过的书：顶层书架的顺序和进度条。ReaderApp 的常驻流，回到书架时首帧就是新顺序；null 时用 [ShelfUi.reads]。 */
+    val reads: StateFlow<Map<String, ReadState>?> = reader.reads
 
     /** null = 首次加载未完成，界面保持空白，避免闪一下空状态。 */
     val ui: StateFlow<ShelfUi?> = combine(
@@ -68,7 +69,7 @@ class ShelfViewModel(app: Application) : AndroidViewModel(app) {
             seriesId != null -> lib.bySeries.getValue(seriesId) to nav.seriesPage
             else -> lib.top to nav.topPage
         }
-        return ShelfUi(settings.libraryRootUri != null, scan, seriesId?.let(lib.seriesNames::get), nav.query, items, lib.recent, page)
+        return ShelfUi(settings.libraryRootUri != null, scan, seriesId?.let(lib.seriesNames::get), nav.query, items, lib.reads, page)
     }
 
     fun openSeries(id: String) = nav.update { it.copy(seriesId = id, seriesPage = 0) }
