@@ -39,6 +39,14 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
+        // 只为采集 baseline profile：和 release 同样的 R8 收缩 / 优化，但不混淆，
+        // 这样真机 dump 出来的 profile 里是源码类名，AGP 打包时才能映射到 release 的混淆名。
+        // 用法见 CLAUDE.md「baseline profile」
+        create("benchmark") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "benchmark-rules.pro")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -79,6 +87,7 @@ dependencies {
     implementation(libs.readium.streamer)
     implementation(libs.readium.navigator)
     implementation(libs.jsoup)   // 原生文字引擎解析 XHTML；Readium 本来就带着它
+    implementation(libs.androidx.profileinstaller)   // 把 baseline-prof.txt 装进 ART 的 profile（装机后系统 bg-dexopt 据此 AOT）
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 

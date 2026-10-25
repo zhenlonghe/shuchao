@@ -8,6 +8,10 @@
 - Android SDK：`/opt/homebrew/share/android-commandlinetools`（`local.properties`）
 - 真机：墨案 Pantone6，adb 直连。实测是 **Android 14 / API 34**、1072×1448、density 300（≈572×772dp），不是 SPEC 写的 Android 11
 - 设备会休眠，截图前先 `adb shell input keyevent KEYCODE_WAKEUP`
+- 面板是横装的（installOrientation 270），**`adb shell input tap/swipe` 的坐标会被系统按 1072/1448 ≈ 0.74 缩放**：
+  要点截图上的 (X, Y) 得注入 (1.35X, 1.35Y)；屏幕右侧 1/3 注入不到，脚本里翻页用 `KEYCODE_VOLUME_DOWN/UP`（app 本来就认）
+- 硬件：RK3568（4×Cortex-A55 @1.8GHz，没有大核）、4GB、eMMC + f2fs、Kaleido 彩色屏（4096 色）、vsync 40Hz；
+  系统**没有**向第三方 app 暴露任何墨水屏刷新 API（无 service、无 framework jar），刷新只能按系统的来
 - 正式签名：`~/.android/shuchao-release.jks`，凭据在根目录 `keystore.properties`（gitignore，备份在 `~/.android/shuchao-keystore.properties`）。
   没有这个文件 release 退回 debug 签名，和发布版互相装不上。仓库公开在 github.com/zhenlonghe/shuchao，发版 = `git tag -a vX.Y.Z` + `gh release create` 附 APK
 
@@ -16,6 +20,7 @@
 ```sh
 ./gradlew :app:testDebugUnitTest          # JVM 单测（ZipReader / OPF 解析 / 排序）
 ./gradlew :app:assembleRelease            # release 用 debug 签名，可直接 adb install -r
+./gradlew :app:assembleBenchmark          # 只为采 baseline profile：同 release 的 R8，但不混淆（见下「baseline profile」）
 adb install -r app/build/outputs/apk/release/app-release.apk   # 首次装正式签名版要先卸载 debug 签名版
 ```
 
@@ -65,6 +70,25 @@ adb install -r app/build/outputs/apk/release/app-release.apk   # 首次装正式
 - 功耗：设备的 batterystats 给不出分应用数据（电池模型是占位值），没法和系统阅读器做 1.3× 对照，只能测 CPU 时间：
   停在一页上 30s ≈ 50ms；翻一页 ≈ 0.57s（app 进程，含进程内的 Chromium 合成）+ 0.35s（WebView 渲染进程），基本全是 Readium/WebView 的开销
 
+
+### Baseline profile（2026-10-24）
+- 为什么：装机包的 dexopt 只有 `verify` 级，所有代码在 4 个 A55 小核上解释 / JIT 跑，冷启动 Fully drawn ≈ 0.90s。
+  全量 AOT（`compile -m speed`）反而让 Displayed 慢 110ms（18.6MB odex 要从 eMMC 换页进来），speed-profile 才是对的：
+  同一个 release 包，verify ≈ 0.84–0.97s → speed-profile ≈ 0.62–0.76s（6 次中位数 0.90 → 0.72s），odex 5.9MB（只编 profile 里的 1.25 万个方法）；
+  顺带没有了整个会话里后台 JIT 的 CPU
+- 文件：`app/src/main/baseline-prof.txt`（1.28 万条，app 自己约 480 条，其余是 Compose / 协程 / Room），AGP 打 release 时经 R8 的 mapping
+  改写成混淆名后压成 `assets/dexopt/baseline.prof`（zlib，只有 8KB，**不是没打进去**）；`profileinstaller` 在首启后把它写进 ART
+- **怎么重采**（改动大了——新页面、换引擎——就重采；手改没意义）。没有 Android Studio，所以不用 Macrobenchmark 模块，走 ART 自己的 profile：
+  1. `./gradlew :app:assembleBenchmark` → `adb install -r app/build/outputs/apk/benchmark/app-benchmark.apk`
+     （`benchmark` 构建类型 = release + `benchmark-rules.pro` 的 `-dontobfuscate`；从 release 包采到的是混淆名，AGP 映射不回去）
+  2. 真机走一遍：冷启动几次、书架翻屏 / 下拉顶栏 / 设置页、文字书开书 + 翻页 + 工具条、漫画进套 + 开卷 + 翻页（翻页用音量键，坐标见上）
+  3. `adb shell am broadcast -a androidx.profileinstaller.action.SAVE_PROFILE -n dev.zhenlong.reader/androidx.profileinstaller.ProfileInstallReceiver`
+     让 ART 立刻落盘（不发的话要前台跑够久才写；每次 6 秒就 force-stop 的话 profile 永远是空的）
+  4. `adb shell cmd package dump-profiles --dump-classes-and-methods dev.zhenlong.reader`，
+     `adb shell cat /data/misc/profman/dev.zhenlong.reader-primary.prof.txt`，去掉以 `[` 开头的数组描述符行（profgen 不认），`sort -u` 后写回 `baseline-prof.txt`
+- **验收**：`adb install` 之后 dexopt 仍是 `verify`，要等系统夜间 bg-dexopt 才会按 profile 编；立刻看效果用
+  `adb shell cmd package compile -m speed-profile -f dev.zhenlong.reader`（`dumpsys package dexopt` 看 status），再量 `Fully drawn`。
+  `cmd package compile --reset` 回到 verify
 
 ### 原生文字引擎（`reader/text/`，2026-09-17，用户反馈文字书开书 3–4s 之后）
 - **文字书默认不再走 Readium / WebView**。真机录屏实测《Apple in China》：白屏到出字 3.9s（第二次 3.1s）→ **0.6s（第二次 0.2–0.4s）**；
