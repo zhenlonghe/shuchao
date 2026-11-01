@@ -39,13 +39,48 @@ class ChapterParser(private val em: Int, private val image: (src: String) -> Any
     private var listDepth = 0
     private var spaceFromNewline = false
 
-    /** 传字节而不是字符串：编码交给 jsoup 从 BOM / XML 声明 / meta 里认。 */
-    fun parse(xhtml: ByteArray): ChapterText {
+    /**
+     * 传字节而不是字符串：编码交给 jsoup 从 BOM / XML 声明 / meta 里认。
+     * @param title 目录里这一章的标题：章首第一段就是它的话按标题排（见 [promoteTitle]）
+     */
+    fun parse(xhtml: ByteArray, title: String? = null): ChapterText {
         val body = Jsoup.parse(ByteArrayInputStream(xhtml), null, "").body()
         walk(body)
         trimEnd()
+        if (title != null) promoteTitle(title)
         return ChapterText(out, anchors)
     }
+
+    /**
+     * calibre 之类工具导出的书常把章标题写成普通段落（`<p class="calibre_4">`），只靠结构认不出来；
+     * 章首第一段和目录里的标题一样，就当标题排：不缩进、居中、加粗、放大（同 h2），下面空一行，分页时不落页底。
+     */
+    private fun promoteTitle(title: String) {
+        val first = out.indexOf('\n').let { if (it < 0) out.length else it }
+        if (first == 0 || out.getSpans(0, first, HeadingSpan::class.java).isNotEmpty()) return
+        val want = compact(title)
+        // 辑名页常拆成两段（「第一辑」「依稀杂忆」）：前两段合起来等于目录标题也算
+        val second = out.indexOf('\n', first + 1).let { if (it < 0) out.length else it }
+        val end = when (want) {
+            compact(out.substring(0, first)) -> first
+            compact(out.substring(0, second)) -> second
+            else -> return
+        }
+        out.getSpans(0, end, LeadingMarginSpan::class.java).forEach(out::removeSpan)
+        fun span(what: Any) = out.setSpan(what, 0, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        span(HeadingSpan())
+        span(StyleSpan(Typeface.BOLD))
+        span(RelativeSizeSpan(HEADING_SIZES[1]))
+        span(AlignmentSpan.Standard(Layout.Alignment.ALIGN_CENTER))
+        if (end < out.length) {
+            val gap = "\n$BLANK"
+            out.insert(end, gap)
+            // anchors 是整数偏移、不随插入移动：标题之后的锚点（脚注、书内目录）要一起往后挪，否则跳转会早两个字、可能落到上一页
+            anchors.replaceAll { _, at -> if (at >= end) at + gap.length else at }
+        }
+    }
+
+    private fun compact(s: String) = s.filterNot { it.isWhitespace() || it == '\u3000' || it == '\u200B' }
 
     private fun walk(parent: Node) {
         for (node in parent.childNodes()) {

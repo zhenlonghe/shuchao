@@ -1,6 +1,7 @@
 package dev.zhenlong.reader.ui
 
 import android.content.Context
+import android.util.DisplayMetrics
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.ReportDrawnWhen
 import androidx.compose.foundation.Image
@@ -51,10 +52,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -72,6 +75,7 @@ import dev.zhenlong.reader.data.progressLabel
 import dev.zhenlong.reader.data.shelfProgress
 import dev.zhenlong.reader.scan.ScanState
 import java.io.File
+import kotlin.math.roundToInt
 
 private const val COLUMNS = 4
 private const val MAX_ROWS = 3
@@ -82,14 +86,25 @@ private val ColumnGap = ScreenMargin   // 列间距 = 屏幕边距：封面之�
 private val MinCoverWidth = 80.dp     // 键盘弹出等矮窗口下，宁可少放一行也不把封面压到看不清
 private val CoverToCaption = 8.dp
 private val MinRowGap = 8.dp          // 行间（以及网格上下）留白的下限；通常远大于此，见 PagedGrid
+private val MinFooterHeight = 32.dp   // 下留白够这么高，页码就放进留白里；不够（矮窗口）才另占一条页脚
 private val TitleLine = 19.sp         // 行高用 sp：跟随系统字号，说明文字不会被固定 dp 裁掉
 private val ProgressBarHeight = 2.dp
-private val ProgressTrack = Color(0xFFCCCCCC)   // 进度条底：平涂浅灰（不用渐变，墨水屏上会抖成色带）
 private val ProgressToLabel = 6.dp
 private val ProgressLabelWidth = 40.sp   // 「已读完」「99%」都放得下：数字定宽，一行里各格的进度条一样长
 private val BadgeSize = 26.dp         // 封面宽约 112dp，角标占不到 1/4；再小就像个污点
 private val BadgeInset = 8.dp
 private val CaptionGray = Color(0xFF5A5A5A)   // 说明文字压淡一档：封面是主角，黑字会和封面抢眼。16 级灰下仍清楚
+// 封面描边与进度条底轨：#999 正好是 16 级灰的第 9 级，比黑框轻、比 #CCC 看得见（对照微信读书：封面是浅灰细边，不是黑框）
+private val EdgeGray = Color(0xFF999999)
+
+/**
+ * 顶层书架一格封面的像素尺寸（竖屏、三行都放得下时宽度顶满的情形）。
+ * 扫描器按这个尺寸生成缩略图，书架上 1:1 贴图，不再二次缩放。和 [PagedGrid] 的算法保持一致。
+ */
+fun shelfCoverSizePx(metrics: DisplayMetrics): IntSize {
+    val widthDp = (metrics.widthPixels / metrics.density - ScreenMargin.value * 2 - ColumnGap.value * (COLUMNS - 1)) / COLUMNS
+    return IntSize((widthDp * metrics.density).roundToInt(), (widthDp * 1.5f * metrics.density).roundToInt())
+}
 
 @Composable
 fun ShelfScreen(
@@ -292,11 +307,15 @@ private fun PagedGrid(
         val perPage = rows * COLUMNS
         val pageCount = ((items.size + perPage - 1) / perPage).coerceAtLeast(1)
         val current = page.coerceIn(0, pageCount - 1)
-        // 页脚只在有东西可显示（页码 / 套名）时才占位；只有一屏时那 44dp 空着，书架会显得偏上
+        // 封面通常是宽度顶满、高度有余：余量均分到网格上方、行间、下方这 rows + 1 段，上下留白一样宽。
+        // 页码 / 套名放进最下面那段留白里（像书页的页码落在下边距里），不另占一条：
+        // 否则页脚压在网格下面，底部是「留白 + 页脚」两段，整屏显得上轻下重
+        val content = (coverHeight + captionHeight) * rows
+        val looseGap = (maxHeight - content) / (rows + 1)
         val footerShown = pageCount > 1 || footerLabel != null
-        val gridHeight = if (footerShown) heightBudget else maxHeight
-        // 封面通常是宽度顶满、高度有余：余量均分到网格上方、行间、下方这 rows + 1 段，上下留白才一样宽
-        val gap = (gridHeight - (coverHeight + captionHeight) * rows) / (rows + 1)
+        val footerInMargin = looseGap >= MinFooterHeight
+        val gap = if (footerShown && !footerInMargin) (heightBudget - content) / (rows + 1) else looseGap
+        val footerHeight = if (footerInMargin) gap else PagerFooterHeight
         val go = { delta: Int ->
             val target = current + delta
             when {
@@ -335,11 +354,15 @@ private fun PagedGrid(
                     }
                 }
             }
-            if (footerShown) PagerFooter(current, pageCount, footerLabel) { go(it) }
+            if (footerShown) PagerFooter(current, pageCount, footerLabel, footerHeight) { go(it) }
         }
     }
 }
 
+/**
+ * 按下不做视觉反馈：试过 Kindle 式的「按下封面反相」，录屏看到阅读器的白页在点击后 60ms 就盖上来了，
+ * 反相根本来不及显示，只多一帧。白页本身就是「点中了」的反馈。
+ */
 @Composable
 private fun Cell(item: ShelfItem, progressOf: ((ShelfItem) -> Float?)?, coverWidth: Dp, coverHeight: Dp, onClick: () -> Unit) {
     Column(Modifier.width(coverWidth).clickable(onClick = onClick)) {
@@ -349,10 +372,11 @@ private fun Cell(item: ShelfItem, progressOf: ((ShelfItem) -> Float?)?, coverWid
                 Cover(path, Modifier.fillMaxSize())
             } else {
                 // 占位封面：白底黑字书名，像一张只有字的素封面
-                Box(Modifier.fillMaxSize().border(OnePx, Color.Black)) {
+                Box(Modifier.fillMaxSize().border(OnePx, EdgeGray)) {
                     Text(
                         item.title,
                         Modifier.padding(10.dp),
+                        fontFamily = FontFamily.Serif,   // 设备有 Noto Serif CJK：像一张只印了书名的素封面
                         fontSize = 13.sp,
                         lineHeight = TitleLine,
                         maxLines = 6,
@@ -380,7 +404,9 @@ private fun Cell(item: ShelfItem, progressOf: ((ShelfItem) -> Float?)?, coverWid
 }
 
 /**
- * 封面下的极简进度：一条 2dp 的细线（浅灰底、黑色已读部分）+ 右侧定宽的百分数。
+ * 封面下的极简进度：一条 2dp 的进度条（[EdgeGray] 底轨 + 黑色已读段）+ 右侧定宽的百分数。
+ * 底轨要画：没有底轨时 1% 只是封面下一个黑点，看着像污渍（用户 2026-10-29 对照微信读书反馈「不精致」）；
+ * #CCC 在 16 级灰下几乎是白所以之前去掉了，#999 看得见。
  * [progress] 为 null（没读过）时什么都不画，但仍占一行高，封面上下对齐不变。
  */
 @Composable
@@ -391,7 +417,7 @@ private fun ProgressCaption(progress: Float?) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (progress != null) {
-            Box(Modifier.weight(1f).height(ProgressBarHeight).background(ProgressTrack)) {
+            Box(Modifier.weight(1f).height(ProgressBarHeight).background(EdgeGray)) {
                 Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).background(Color.Black))
             }
             Spacer(Modifier.width(ProgressToLabel))
@@ -424,8 +450,10 @@ private fun CountBadge(count: Int, modifier: Modifier) {
 }
 
 /**
- * 所有封面统一成 2:3：居中裁切铺满槽位（漫画略高、中文书略宽，各裁掉一点边），一屏封面的边缘和间距才整齐。
- * 1px 描边压在槽位最外一圈：深色封面上几乎隐形，浅色封面靠它和白底分开。加载完成前什么都不画，不闪空框。
+ * 缩略图在扫描时已经裁成 2:3、缩到这一格的像素（[shelfCoverSizePx]）并按墨水屏调过色，这里 1:1 贴上；
+ * Crop 只在矮窗口（键盘弹出）封面缩小时才真正起作用。
+ * 1px 浅灰描边压在槽位最外一圈：浅色封面靠它和白底分开，又不像黑框那样把封面「框死」（微信读书也是浅灰细边）。
+ * 加载完成前什么都不画，不闪空框。
  */
 @Composable
 private fun Cover(path: String, modifier: Modifier) {
@@ -438,7 +466,7 @@ private fun Cover(path: String, modifier: Modifier) {
             if (painter.intrinsicSize.isSpecified) {
                 val stroke = 1f
                 drawRect(
-                    color = Color.Black,
+                    color = EdgeGray,
                     topLeft = Offset(stroke / 2, stroke / 2),
                     size = Size(size.width - stroke, size.height - stroke),
                     style = Stroke(stroke),
@@ -449,6 +477,6 @@ private fun Cover(path: String, modifier: Modifier) {
     )
 }
 
-/** 缩略图本身已是展示尺寸，按原尺寸解码，缓存 key 才能和预取的请求对上。 */
+/** 缩略图本身就是展示像素，按原尺寸解码（不缩放），缓存 key 才能和预取的请求对上。 */
 internal fun coverRequest(context: Context, path: String): ImageRequest =
     ImageRequest.Builder(context).data(File(path)).size(CoilSize.ORIGINAL).build()

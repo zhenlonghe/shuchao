@@ -2,6 +2,7 @@ package dev.zhenlong.reader
 
 import dev.zhenlong.reader.scan.EpubMetaParser
 import dev.zhenlong.reader.scan.NaturalOrder
+import dev.zhenlong.reader.scan.TocItem
 import dev.zhenlong.reader.scan.ZipReader
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -61,6 +62,59 @@ class ScanTest {
 
     private fun parse(metadata: String, manifest: String) =
         zipOf("META-INF/container.xml" to container, "OEBPS/content.opf" to opf(metadata, manifest)).use(EpubMetaParser::parse)!!
+
+    @Test
+    fun tocFromNcx() {
+        val opf = """<?xml version="1.0" encoding="UTF-8"?>
+            <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+              <manifest>
+                <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+                <item id="c1" href="text/c1.xhtml" media-type="application/xhtml+xml"/>
+              </manifest>
+              <spine toc="ncx"><itemref idref="c1"/></spine>
+            </package>""".toByteArray()
+        val ncx = """<?xml version="1.0" encoding="UTF-8"?>
+            <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+              <navMap>
+                <navPoint id="a" playOrder="1">
+                  <navLabel><text> 第一辑　依稀杂忆 </text></navLabel>
+                  <content src="text/c1.xhtml"/>
+                  <navPoint id="b" playOrder="2">
+                    <navLabel><text>常州青果巷</text></navLabel>
+                    <content src="text/c2.xhtml#top"/>
+                  </navPoint>
+                </navPoint>
+              </navMap>
+            </ncx>""".toByteArray()
+        val toc = zipOf("META-INF/container.xml" to container, "OEBPS/content.opf" to opf, "OEBPS/toc.ncx" to ncx)
+            .use(EpubMetaParser::parseToc)
+        assertEquals(listOf(TocItem("第一辑　依稀杂忆", "OEBPS/text/c1.xhtml"), TocItem("常州青果巷", "OEBPS/text/c2.xhtml")), toc)
+    }
+
+    @Test
+    fun tocPrefersEpub3Nav() {
+        val opf = """<?xml version="1.0" encoding="UTF-8"?>
+            <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+              <manifest>
+                <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+                <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+              </manifest>
+              <spine toc="ncx"/>
+            </package>""".toByteArray()
+        val nav = """<?xml version="1.0" encoding="UTF-8"?>
+            <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
+              <nav epub:type="landmarks"><ol><li><a href="cover.xhtml">封面</a></li></ol></nav>
+              <nav epub:type="toc"><ol>
+                <li><a href="ch1.xhtml">第一章</a><ol><li><a href="ch1.xhtml#s2">第二节</a></li></ol></li>
+                <li><a href="ch2.xhtml">第二章</a></li>
+              </ol></nav>
+            </body></html>""".toByteArray()
+        val ncx = """<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap><navPoint id="x"><navLabel><text>NCX</text></navLabel><content src="ch1.xhtml"/></navPoint></navMap></ncx>""".toByteArray()
+        val toc = zipOf("META-INF/container.xml" to container, "OEBPS/content.opf" to opf, "OEBPS/nav.xhtml" to nav, "OEBPS/toc.ncx" to ncx)
+            .use(EpubMetaParser::parseToc)
+        assertEquals(listOf("第一章", "第二节", "第二章"), toc.map { it.title })
+        assertEquals(listOf("OEBPS/ch1.xhtml", "OEBPS/ch1.xhtml", "OEBPS/ch2.xhtml"), toc.map { it.document })
+    }
 
     @Test
     fun epub3CoverImageProperty() {

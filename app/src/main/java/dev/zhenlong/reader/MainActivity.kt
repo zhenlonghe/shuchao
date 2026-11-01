@@ -26,7 +26,8 @@ class MainActivity : FragmentActivity() {
         // 代价只是回到书架；阅读位置存在库里，不受影响。
         super.onCreate(null)
         // 内容始终铺满整个窗口、自己让开系统栏和键盘：进出阅读器时状态栏的隐现只动顶上那一条，
-        // 不会让整页重新布局；键盘弹出时窗口也不缩小（窗口是透明的，缩小会漏出桌面）
+        // 不会让整页重新布局；键盘弹出时窗口也不缩小（窗口是透明的，缩小会漏出桌面）。
+        // 书架 / 设置用系统状态栏（用户 2026-11-01：不再自绘时间电量），阅读器里沉浸（ReaderScreen.Immersive）
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             InkTheme {

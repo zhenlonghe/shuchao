@@ -117,7 +117,10 @@ class ReaderHostViewModel(app: Application, savedState: SavedStateHandle) : Andr
 
             _fonts.value = reader.settings.filterNotNull().first().fontsFolderUri?.let { listUserFonts(reader, Uri.parse(it)) }.orEmpty()
             val estimator = PageEstimator(spine.documents.map { zip.entries[it]?.size ?: 0L })
-            val text = TextEngine(viewModelScope, zip, spine.documents, estimator, target, startSpot(book.locatorJson))
+            // 目录里每个文档的第一条标题：章首当标题排、页脚写章名。坏目录不影响开书
+            val toc = runCatching { EpubMetaParser.parseToc(zip) }.getOrDefault(emptyList())
+            val titles = spine.documents.map { doc -> toc.firstOrNull { it.document == doc }?.title }
+            val text = TextEngine(viewModelScope, zip, spine.documents, titles, estimator, target, startSpot(book.locatorJson))
             HostState.Ready(book, manga, text)
         } catch (e: Exception) {
             Log.w(TAG, "cannot open ${book.fileName}", e)

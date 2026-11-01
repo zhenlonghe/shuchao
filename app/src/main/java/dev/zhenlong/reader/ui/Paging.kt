@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -37,8 +38,8 @@ internal fun Modifier.verticalPageSwipe(vararg keys: Any?, onTurn: (Int) -> Unit
 
 /** [label]：页码前的一小段上下文（书架在一套里时放套名）。只有一屏时不显示页码，也没有点击区。 */
 @Composable
-internal fun PagerFooter(page: Int, pageCount: Int, label: String? = null, onTurn: (Int) -> Unit) {
-    Box(Modifier.fillMaxWidth().height(PagerFooterHeight), contentAlignment = Alignment.Center) {
+internal fun PagerFooter(page: Int, pageCount: Int, label: String? = null, height: Dp = PagerFooterHeight, onTurn: (Int) -> Unit) {
+    Box(Modifier.fillMaxWidth().height(height), contentAlignment = Alignment.Center) {
         if (pageCount > 1) {
             Row(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f).fillMaxHeight().clickable { onTurn(-1) })

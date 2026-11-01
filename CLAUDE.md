@@ -46,12 +46,13 @@ adb install -r app/build/outputs/apk/release/app-release.apk   # 首次装正式
   M2–M4 涉及这几项时不要再做 app 内开关；具体行为（尤其 §7 黑帧刷新、§5.5 对比度增强是否还做）动手前先和用户确认
 
 ## 名字与图标
-- 应用名 **书巢**（`strings.xml`）；包名仍是 `dev.zhenlong.reader`
-- 图标：自适应图标，`mipmap-anydpi-v26/ic_launcher*.xml` = 纯色底 `@color/ic_launcher_background` + `drawable/ic_launcher_foreground.xml`。
-  源文件在 `design/`：`shuchao-icon-original.svg` 是用户给的原稿（墨蓝 #4E6B78），`shuchao-icon.svg` 是针对 Kaleido 调过色的现用版——
-  用户要「水墨感」、嫌第一版（#1F5A73）太深：现在是同一种墨的三个浓淡——底 #6F919D（中墨）、后层 #B7CDD5（淡墨）、书页纯白（留白）、书脊露出底色。
-  Kaleido 会把颜色压暗，所以取得比原稿还浅；全部平涂，不用渐变（墨水屏上渐变会抖成色带）。
-  前景比原稿比例放大了 1.2 倍（墨案桌面的图标蒙版近乎直角方形）
+- 应用名 **墨案**（`strings.xml`，用户 2026-10-29 定，之前叫「书巢」）；包名仍是 `dev.zhenlong.reader`
+- 图标（2026-10-29，用户要「有质感」，试过一版衬线「墨」字 + 朱印，用户要求回到原来的翻开书页上优化）：
+  原稿 `design/shuchao-icon-original.svg` 的几何不变，加层次——底 #628794（中墨，比上一版 #6F919D 深一点，放在桌面饱和的系统图标旁才站得住）、
+  后层「巢」两个浓淡（#B3CAD2 + 贴着书页的暗面 #93AFB9）、书页纸色 #F4F1E8（不用纯白）、书页下沿 45° 往外上错开垫两张纸
+  （#D9E1E2 / #C3D2D7，纸角从上沿和外沿露出来显出厚度，下面的尖不露）、脊旁一道折痕暗面 #E8E3D6。全部平涂。
+  **生成**：`python3 design/mkicon.py design/moan-icon.svg app/src/main/res/drawable/ic_launcher_foreground.xml`（左半边路径镜像出右半边；
+  1.2× 放大映到 108dp，同上一版）。改颜色 / 几何只改脚本，不手改 XML
 
 ## 已定的实现取舍
 
@@ -59,11 +60,13 @@ adb install -r app/build/outputs/apk/release/app-release.apk   # 首次装正式
 - **审计方法**：`adb shell screenrecord` 录一段操作 → `ffmpeg -vf mpdecimate` 去重后平铺成一张图，数「一次操作产生了几帧不同画面」。
   瞬切 = 恰好 1 帧。审计时把三个 `*_animation_scale` 设成 1（设备出厂是 0），**做完务必改回 0**
 - 结果：书架翻屏 / 进出一套 / 设置 / 阅读翻页 / 工具条 / 面板 / 目录，全部单帧。剩下的多帧只有系统自己的状态栏隐现（scale=0 时也是瞬切）
+  → 10-28 试过全 app 隐藏状态栏、书架顶上自绘时间 / 电量；**11-01 用户要求改回系统状态栏**：书架 / 设置用 `stableSystemBarsPadding()`
+  （按「栏始终在」让开，从阅读器回来时整页不跳），阅读器 `Immersive()` 隐藏、离开时还原。自绘的那行已删，`ui/Clock.kt` 只剩阅读页脚用的 `currentTime()`
 - 启动只刷一次屏，靠三件事：`windowIsTranslucent`（Android 12+ 无视 `windowDisablePreview`，只有半透明窗口不套启动画面）、
   `windowBackground` 透明 + 书库没备好时 `ShelfScreen` 什么都不画（桌面一直留到完整书架出现）、
   `ReaderApp.preloadFirstScreen` 先把首屏 12 张封面送进 Coil 内存缓存再放出书库数据
 - 窗口是透明的，所以**每个页面必须自己铺满白底**，且窗口不能被键盘挤小（会漏出桌面）→ 全 app edge-to-edge
-  （`setDecorFitsSystemWindows(false)`），页面用 `stableSystemBarsPadding()`（按「系统栏始终在」算，否则从全屏阅读器退回来时整页会先顶上去再被推下来）+ `imePadding()`
+  （`setDecorFitsSystemWindows(false)`）+ `imePadding()`；状态栏 37dp，书架 / 设置自己让开（设备没有导航栏）
 - 阅读器揭开白色遮罩比 `onPageChanged` 晚 120ms：WebView 的画面比回调晚一两帧上屏，否则页脚先于正文出现
 - 从阅读器回到搜索状态的书架不再自动弹键盘（只有刚点开搜索时才要焦点）
 - Manifest 里移除了 media3 带进来的 `WAKE_LOCK` / `ACCESS_NETWORK_STATE` 权限和 EmojiCompat 启动初始化；无 Service、无 WakeLock、无 KEEP_SCREEN_ON（已用 dumpsys 核对）
@@ -126,12 +129,12 @@ adb install -r app/build/outputs/apk/release/app-release.apk   # 首次装正式
 - 量开书时间要看**录屏的帧时间戳**（`scratchpad` 里的 opentime 做法：screenrecord + `mpdecimate,showinfo`），不要只信 Readium 的回调——回调比真正上屏早很多
 - 工具条顶栏右侧「文字 漫画」切换，当前模式加下划线；手动切换写 `Book.kindOverride`，按书记住
 - 两套偏好：DataStore 里漫画的键带 `manga.` 前缀（`Settings.styleFor(kind)`）。漫画默认四边零留白；漫画模式**不显示页脚**（页数在工具条顶栏看），
-  底栏只有「边距 / 目录」
+  底栏只有「目录 / 版式」，版式里没有行距
 - 左右边距档位从 0 起（0 给漫画铺满用）。旧键 `marginStep` 是从 0.25 起的，读旧值时 +1，新键叫 `hMarginStep`
 
 ### 翻页与页码（用户 2026-09-17 指定，覆盖 SPEC §5.4）
 - 点**左右两侧 1/3 都是下一页**（用户左右手交替单手拿），上一页靠右滑；中间 1/3 呼出工具条。音量键不变
-- 页脚右侧是**全书**的「当前页/总页数」，是估算：`PageEstimator`——翻到过的章用真实页数，其余按字节数比例估，至少 1 页；
+- 页脚右侧是**全书**的「当前页/总页数 · 百分比」（百分比 = 页/总页，用户 2026-10-29 加的；和书架进度同源），是估算：`PageEstimator`——翻到过的章用真实页数，其余按字节数比例估，至少 1 页；
   改排版后 `reset()`。漫画一章一图所以是精确的；文字书随阅读逐步校准，总页数可能小幅跳动。真分页要把每章都排一遍，太慢，不做
 
 
@@ -141,12 +144,17 @@ adb install -r app/build/outputs/apk/release/app-release.apk   # 首次装正式
 - `ZipContainer` 把 `ZipReader` 接成 Readium 的 `Container`：不走 Readium 自带的 content:// 支持（每次区间读都重新开流 skip，很慢）
 - 手势：`SwipeInterceptLayout` 在父层截走所有拖动，WebView 收不到 MOVE → 没有跟手滚动；点按照常交给 Readium（`InputListener.onTap`）
 - 音量键在 `MainActivity.dispatchKeyEvent` 拦（焦点在 WebView 上，`onKeyDown` 太晚）；同时认 PAGE_UP/DOWN、DPAD 左右。无开关（见上）
+- **章名在左上角页眉**（用户 2026-10-29 指定，原来在页脚中间）：`PageHeader`，只有原生文字模式有（目录标题）；高度和页脚一样 22dp，
+  `topMarginDp` 把它算进上边距（和 `bottomMarginDp` 对称），版心仍在正中。点链接时要先减掉页眉高再算版心坐标。原版 / 漫画模式没有页眉
 - 页脚「页/总页」来自 `PaginationListener`；改排版后的重排不触发它，用一段 JS 向 WebView 重新问一次
 - **用户字体**（2026-09-17 用户要求，超出 SPEC「一期不做字体导入」）：字体面板末项经 SAF 授权一个字体文件夹（选择器默认落在 `/sdcard/Fonts`；
   按路径直接读需要 `MANAGE_EXTERNAL_STORAGE`，SPEC 禁止）。`reader/Fonts.kt`：`FontContainer` 把字体伪装成书内资源挂在
   `https://readium_package/__reader_font/…`（Readium 只肯从 APK assets 或书本身供文件），直接从 SAF 流式读、不复制。
   @font-face 全部声明、惰性加载；声明在渲染器创建时定死，所以字体列表变化会重建一次 Fragment（从 `vm.lastLocator` 接着读）。
   改书库目录时只释放旧书库的授权，不能动字体文件夹的授权
+- **底栏归组**（用户 2026-11-01）：左「目录」，右「字体」「版式」，图标在上、字在下（`ic_toc` / `ic_type` / `ic_layout`，自绘 24dp 1.5 描边）。
+  字体面板 = 字体（一行，点进字体列表，选中项打勾）· 字号 · 粗细；版式面板 = 行距 · 左右 · 上下。`Panel` 只剩 `TYPE / LAYOUT / FONT_LIST`，
+  返回键在字体列表里先回字体面板。滑块左侧灰标签，两端是示意（字号大小 A、粗细细 / 粗 A、行距紧 / 松、页边窄 / 宽图标），已选段画粗线
 - **字号 / 行距 / 边距都是离散滑块**（用户要求；SPEC 原为 8 档按钮 + 三选一）：字号 12 档（0.8–2.2）、行距 13 档（1.0–2.2）、
   左右边距 12 档（Readium `pageMargins` 0.25–3.0）、上下边距 9 档（0–64dp，默认 24dp）。`StepSlider` 拖动时只动滑块，松手才提交、正文只重排一次
 - **上下边距**不是 Readium 的设置（它没有），而是 Compose 给 WebView 容器加的 padding（上 = v，下 = v/2，下面还有页脚）；容器变尺寸后 Readium 会自己重新分页
@@ -181,12 +189,22 @@ adb install -r app/build/outputs/apk/release/app-release.apk   # 首次装正式
     首帧就是新顺序，之后只有系统状态栏 / 时钟的变化。`ReaderApp` 在顺序变了时把新首屏 12 张封面预取进内存；每存一次进度都会走到，首屏没变就跳过
 - 说明文字用灰 `#5A5A5A`（封面是主角，纯黑会抢眼；16 级灰下仍清楚）；成套角标 20 → 26dp、字 12sp、内边距 8dp（20dp 在 112dp 宽的封面上像个污点）
 - 成套条目的册数是封面**右上角的圆形角标**（白底黑边，20dp，三位数拉成胶囊；用户 2026-09-20 指定，原来是书名下「共 N 本」一行）
-- 纵向留白（用户 2026-09-20 反馈「整体靠上、底部留白多」）：封面宽度顶满、高度有余，余量**均分到网格上方、行间、下方 rows+1 段**；
-  页脚只在有东西可显示（页码 / 套名）时才占位，只有一屏时那 44dp 不留
+- 纵向留白（用户 2026-09-20 反馈「整体靠上、底部留白多」）：封面宽度顶满、高度有余，余量**均分到网格上方、行间、下方 rows+1 段**（本机 ≈36dp）；
+  页码 / 套名**放进最下面那段留白里**（11-01，像书页的页码落在下边距），不另占 44dp——否则底部是「留白 + 页脚」两段、上轻下重。
+  下留白不足 32dp（矮窗口）才退回单独一条 44dp 页脚
 - 全屏共用 24dp 边距（`ScreenMargin`）：封面外缘、顶栏图标字形边缘、设置页文字都对齐到这条线
 - 封面列间距 = `ScreenMargin`（24dp，用户 2026-09-17 对照微信读书后要求加大；原来是 ≈17dp，边距比间距大、显得挤）；封面到书名 8dp。封面因此略小（219 → 211px 宽），省下的高度自动均摊到行间
 - 封面**统一 2:3**（用户 2026-09-17 对照微信读书后要求）：`ContentScale.Crop` 居中裁切铺满槽位，描边画在槽位上。之前是按原比例贴左贴底，
   比例不一的封面让列间距看起来参差。代价：特别瘦长的封面（如海賊王彩色版 ≈ 1:1.78）上下会裁掉一截
+- **封面缩略图按 Kaleido 「印」出来**（2026-10-28）：`LibraryScanner.writeThumbnail` 裁 2:3、缩到书架格子的实际像素
+  （`shelfCoverSizePx`，本机 212×318，显示时 1:1 不再重采样）、**保留彩色**（试过灰度，用户明确要彩色）、饱和度 1.25、
+  固定 γ0.85 提亮中间调补回彩膜吃掉的亮度。试过按图自动色阶：白字不到 0.5% 像素的深色封面被整张拉亮 1.5 倍、变成另一张图，撤了。
+  版本号 `THUMB_VERSION`，`covers/.vN` 标记；版本变了 `ReaderApp` 启动时主动全库重扫一次（≈10s）。
+  试过按下封面反相当点按反馈（Kindle 式），录屏看到阅读器的白页在点击后 60ms 就盖上来，反相看不见只多一帧，撤了
+- **对照微信读书墨水屏版打磨**（用户 2026-10-29「不如微信读书精致」）：真机截图并排比对，差在两处——它的封面是浅灰 1px 细边、我们是黑框，
+  把封面「框死」；我们的进度条没有底轨，1% 就是封面下一个黑点，像污渍。改为描边和进度底轨都用 `EdgeGray` #999999
+  （16 级灰第 9 级；之前试过 #CCCCCC 底轨几乎是白所以去掉了）。微信读书封面下写粗黑书名，我们按用户 10-25 的决定仍是进度条 + 灰百分数
+- 无封面的占位封面用衬线字（设备有 Noto Serif CJK）
 - 扫描跳过所有点开头的文件 / 目录（用户书库里有 macOS 的 `._xxx.epub` 伴生文件，会被当成坏书并排到每套第一本）；一套的封面取排序后第一本**有封面**的书
 - 书名说明用中间省略（`TextOverflow.MiddleEllipsis`）：同一套的书名区别在末尾「卷01」
 - 说明文字行高用 sp 计算进网格高度，系统字号放大时封面让位、文字不裁切

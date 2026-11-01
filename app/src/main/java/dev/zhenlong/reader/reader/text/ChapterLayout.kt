@@ -64,6 +64,10 @@ class PictureSpan(
 
 /** 一章排好版、分好页的结果。 */
 class ChapterLayout(val chapter: Int, val content: ChapterText, paint: TextPaint, width: Int, private val pageHeight: Int, lineHeight: Float) {
+    private companion object {
+        const val MAX_JUSTIFY = 0.25f   // 差超过版心 1/4 的行不拉
+    }
+
     // 行距滑块是 CSS 的含义（行高 = 字号 × 倍数）；StaticLayout 的倍数却是乘在字体的自然行高上的，要换算
     private val spacing = lineHeight * paint.textSize / (paint.fontMetrics.descent - paint.fontMetrics.ascent)
 
@@ -146,30 +150,84 @@ class ChapterLayout(val chapter: Int, val content: ChapterText, paint: TextPaint
     /**
      * @param emboldenEm 加粗：字形描边、每一笔加宽这么多（em）。描边不改字距，分页不受影响，所以画的时候才定、不用重排；
      *   任何字体都有效（系统中文字体多半只有一个字重）。正文里本来就粗的（标题、强调）叠加在上面仍然更粗
+     *
+     * 中文齐尾：API 34 只有按空格拉伸的两端对齐，中文一行没有空格就等于没对齐，行尾参差。
+     * 这里逐行画：该齐尾的行（[justifySlack]）把差的宽度均分到字间（临时设画笔的 letterSpacing），
+     * 断行不变、分页不变，只是画的时候每个字挪一点。英文 / 中英混排（行里有空格）仍由 StaticLayout 拉空格。
      */
     fun draw(canvas: Canvas, page: Int, emboldenEm: Float = 0f) {
         val p = page.coerceIn(0, pageCount - 1)
-        val top = layout.getLineTop(pageStarts[p])
-        val bottom = layout.getLineBottom(pageStarts[p + 1] - 1)
-        layout.paint.apply {
+        val first = pageStarts[p]
+        val last = pageStarts[p + 1] - 1
+        val top = layout.getLineTop(first)
+        val bottom = layout.getLineBottom(last)
+        val paint = layout.paint.apply {
             style = if (emboldenEm > 0f) Paint.Style.FILL_AND_STROKE else Paint.Style.FILL
             strokeWidth = emboldenEm * textSize
             strokeJoin = Paint.Join.ROUND   // 笔画尖角处不冒刺
+            letterSpacing = 0f
         }
+        // 先量后画：行宽是用当前画笔现量的，字距一改就不准了
+        val slacks = FloatArray(last - first + 1) { justifySlack(first + it) }
         canvas.save()
         canvas.translate(0f, topInset(p).toFloat())
         canvas.clipRect(0, 0, layout.width, bottom - top)
         canvas.translate(0f, -top.toFloat())
+        for (line in first..last) {
+            val slack = slacks[line - first]
+            if (slack <= 0f) {
+                paint.letterSpacing = 0f
+                drawLine(canvas, line)
+                continue
+            }
+            // letterSpacing 加在每个字的左右各一半：整体左移半个间距，首字仍贴左沿；行尾差半个间距，不到 1px
+            val glyphs = Character.codePointCount(content.text, layout.getLineStart(line), layout.getLineVisibleEnd(line)).coerceAtLeast(1)
+            val perGlyph = slack / glyphs
+            paint.letterSpacing = perGlyph / paint.textSize
+            canvas.save()
+            canvas.translate(-perGlyph / 2, 0f)
+            drawLine(canvas, line)
+            canvas.restore()
+        }
+        paint.letterSpacing = 0f
+        canvas.restore()
+    }
+
+    /** 只画这一行：Layout 没有公开的按行画的接口，用裁剪让它只画裁剪范围里的那一行（画布已在排版坐标系里）。 */
+    private fun drawLine(canvas: Canvas, line: Int) {
+        canvas.save()
+        canvas.clipRect(0, layout.getLineTop(line), layout.width, layout.getLineBottom(line))
         layout.draw(canvas)
         canvas.restore()
+    }
+
+    /**
+     * 这一行要补到右沿的宽度（px）；0 = 不齐尾：段落末行、居中的行（标题）、有图的行、
+     * 有空格的行（StaticLayout 已经拉过空格）、差得太多的行（下一个词太长挤下去的，硬拉会很稀）。
+     * 画笔的 letterSpacing 必须是 0 时调用。
+     */
+    private fun justifySlack(line: Int): Float {
+        val text = content.text
+        val start = layout.getLineStart(line)
+        val end = layout.getLineEnd(line)
+        if (end >= text.length || text[end - 1] == '\n') return 0f
+        if (layout.getParagraphAlignment(line) != Layout.Alignment.ALIGN_NORMAL) return 0f
+        if (text.getSpans(start, end, PictureSpan::class.java).isNotEmpty()) return 0f
+        for (i in start until layout.getLineVisibleEnd(line)) if (text[i] == ' ') return 0f
+        val slack = layout.width - layout.getLineMax(line)   // getLineMax 含首行缩进、不含行尾空白
+        return if (slack > 0f && slack <= layout.width * MAX_JUSTIFY) slack else 0f
     }
 
     /** 点在 (x, y)（相对这一页的版心左上角）上的链接。 */
     fun linkAt(page: Int, x: Float, y: Float): LinkSpan? {
         val p = page.coerceIn(0, pageCount - 1)
         val line = layout.getLineForVertical(layout.getLineTop(pageStarts[p]) + y.toInt() - topInset(p))
-        if (line >= pageStarts[p + 1] || x < layout.getLineLeft(line) || x > layout.getLineRight(line)) return null
-        val offset = layout.getOffsetForHorizontal(line, x)
+        if (line >= pageStarts[p + 1]) return null
+        // 齐尾的行画出来比排出来宽，把点按位置按比例缩回排版坐标
+        val slack = justifySlack(line)
+        val xx = if (slack > 0f) x * layout.getLineMax(line) / (layout.getLineMax(line) + slack) else x
+        if (xx < layout.getLineLeft(line) || xx > layout.getLineRight(line)) return null
+        val offset = layout.getOffsetForHorizontal(line, xx)
         return (content.text as Spanned).getSpans(offset, offset, LinkSpan::class.java).firstOrNull()
     }
 }

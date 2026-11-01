@@ -92,7 +92,7 @@ fun SettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = viewModel()) {
             action = "重新扫描".takeIf { s.libraryRootUri != null && scan !is ScanState.Running },
             onAction = vm::rescan,
         )
-        SettingRow("关于", value = "书巢 ${BuildConfig.VERSION_NAME}")
+        SettingRow("关于", value = "墨案 ${BuildConfig.VERSION_NAME}")
     }
 }
 

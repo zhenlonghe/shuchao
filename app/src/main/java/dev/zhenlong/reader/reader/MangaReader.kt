@@ -61,7 +61,7 @@ internal fun MangaReader(ready: HostState.Ready, vm: ReaderHostViewModel, onBack
     BackHandler {
         when (val c = chrome) {
             Chrome.Hidden -> exit()
-            is Chrome.Bars -> chrome = if (c.panel != null) Chrome.Bars() else Chrome.Hidden
+            is Chrome.Bars -> chrome = when (c.panel) { null -> Chrome.Hidden; Panel.FONT_LIST -> Chrome.Bars(Panel.TYPE); else -> Chrome.Bars() }
             Chrome.Toc -> chrome = Chrome.Bars()
         }
     }

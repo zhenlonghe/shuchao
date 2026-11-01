@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val FIRST_SCREEN_ITEMS = 12   // 书架一屏 4×3
 
@@ -76,6 +77,11 @@ class ReaderApp : Application() {
             .flowOn(Dispatchers.Default)
             .stateIn(appScope, SharingStarted.Eagerly, null)
         settings = prefs.settings.flowOn(Dispatchers.IO).stateIn(appScope, SharingStarted.Eagerly, null)
+        // 缩略图的处理方式升级过：这一次启动把全库重扫一遍（≈ 9s，书架上显示「正在扫描」），之后不再触发
+        appScope.launch {
+            val root = settings.first { it != null }?.libraryRootUri ?: return@launch
+            if (withContext(Dispatchers.IO) { scanner.thumbnailsOutdated() }) startScan(Uri.parse(root))
+        }
     }
 
     private var preloadedFirstScreen: List<String>? = null   // 只在 reads 那条流（Dispatchers.Default 上串行）里读写

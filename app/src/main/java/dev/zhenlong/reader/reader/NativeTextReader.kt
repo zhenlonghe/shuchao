@@ -74,7 +74,7 @@ internal fun NativeTextReader(ready: HostState.Ready, vm: ReaderHostViewModel, o
     BackHandler {
         when (val c = chrome) {
             Chrome.Hidden -> if (!ready.text.back()) exit()
-            is Chrome.Bars -> chrome = if (c.panel != null) Chrome.Bars() else Chrome.Hidden
+            is Chrome.Bars -> chrome = when (c.panel) { null -> Chrome.Hidden; Panel.FONT_LIST -> Chrome.Bars(Panel.TYPE); else -> Chrome.Bars() }
             Chrome.Toc -> chrome = Chrome.Bars()
         }
     }
@@ -86,7 +86,7 @@ internal fun NativeTextReader(ready: HostState.Ready, vm: ReaderHostViewModel, o
     val margins = PaddingValues(
         start = (style.pageMargins * MARGIN_UNIT_DP).dp,
         end = (style.pageMargins * MARGIN_UNIT_DP).dp,
-        top = style.verticalMarginDp.dp,
+        top = topMarginDp(style.verticalMarginDp).dp,
         bottom = bottomMarginDp(style.verticalMarginDp).dp,
     )
     val marginsNow by rememberUpdatedState(margins)
@@ -97,7 +97,8 @@ internal fun NativeTextReader(ready: HostState.Ready, vm: ReaderHostViewModel, o
                 detectTapGestures { at ->
                     val link = pageNow?.let { p ->
                         val left = marginsNow.calculateLeftPadding(LayoutDirection.Ltr).toPx()
-                        p.layout.linkAt(p.page, at.x - left, at.y - marginsNow.calculateTopPadding().toPx())
+                        // 版心上方还有一行页眉
+                        p.layout.linkAt(p.page, at.x - left, at.y - HeaderHeight.toPx() - marginsNow.calculateTopPadding().toPx())
                     }
                     when {
                         chromeNow != Chrome.Hidden -> chrome = Chrome.Hidden
@@ -118,6 +119,7 @@ internal fun NativeTextReader(ready: HostState.Ready, vm: ReaderHostViewModel, o
                 ) { _, delta -> dragged += delta }
             },
     ) {
+        PageHeader(page?.title)
         Canvas(
             Modifier.fillMaxWidth().weight(1f).padding(margins)
                 .onSizeChanged { vm.setTextViewport(it.width, it.height, density.density, density.density * density.fontScale) },

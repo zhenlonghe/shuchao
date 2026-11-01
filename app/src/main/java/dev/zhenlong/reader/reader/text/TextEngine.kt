@@ -17,8 +17,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** 屏幕上的这一页。[bookPage] / [bookPages]：全书页码（估算，见 [PageEstimator]）。 */
-class TextPage(val layout: ChapterLayout, val page: Int, val bookPage: Int, val bookPages: Int) {
+/** 屏幕上的这一页。[bookPage] / [bookPages]：全书页码（估算，见 [PageEstimator]）；[title]：所在章在目录里的标题（页脚用）。 */
+class TextPage(val layout: ChapterLayout, val page: Int, val bookPage: Int, val bookPages: Int, val title: String?) {
     val chapter get() = layout.chapter
     val offset get() = layout.startOffset(page)
     val chapterLength get() = layout.content.text.length
@@ -51,10 +51,14 @@ class TextEngine(
     private val scope: CoroutineScope,
     private val zip: ZipReader,
     private val documents: List<String>,
+    /** 每个章节文档在目录里的标题；没有自己条目的（一章拆成多个文件）= null */
+    private val titles: List<String?>,
     private val estimator: PageEstimator,
     startChapter: Int,
     startSpot: Spot,
 ) {
+    /** 页脚写的章名：没有自己条目的文档沿用前一个有条目的 */
+    private val footerTitles: List<String?> = documents.indices.map { i -> (i downTo 0).firstNotNullOfOrNull { titles.getOrNull(it) } }
     private val _page = MutableStateFlow<TextPage?>(null)
     val page: StateFlow<TextPage?> = _page
 
@@ -145,7 +149,7 @@ class TextEngine(
     private fun show(layout: ChapterLayout, page: Int) {
         estimator.record(layout.chapter, layout.pageCount)
         val (bookPage, bookPages) = estimator.locate(layout.chapter, page + 1) ?: (page + 1 to layout.pageCount)
-        _page.value = TextPage(layout, page, bookPage, bookPages)
+        _page.value = TextPage(layout, page, bookPage, bookPages, footerTitles.getOrNull(layout.chapter))
         // 章内翻页走的是同步路径，这里顺手把再下一页的图也备上，并放掉走远了的
         scope.launch {
             decodePictures(layout, page + 1)
@@ -190,7 +194,7 @@ class TextEngine(
                 } else null
             }
             val bytes = zip.readBytes(zip.entries.getValue(document), MAX_XHTML_BYTES)
-            ChapterLayout(chapter, parser.parse(bytes), paint, p.width, p.height, p.lineHeight)
+            ChapterLayout(chapter, parser.parse(bytes, titles.getOrNull(chapter)), paint, p.width, p.height, p.lineHeight)
         }.getOrElse {
             // 坏掉的一章不能把整本书卡住
             ChapterLayout(chapter, ChapterText(SpannedString("（这一章无法显示）"), emptyMap()), paint, p.width, p.height, p.lineHeight)

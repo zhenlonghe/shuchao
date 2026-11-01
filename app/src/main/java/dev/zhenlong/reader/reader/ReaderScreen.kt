@@ -2,17 +2,20 @@
 
 package dev.zhenlong.reader.reader
 
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.graphics.Color as AndroidColor
 import android.provider.DocumentsContract
-import android.text.format.DateFormat
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -66,11 +69,11 @@ import dev.zhenlong.reader.data.ReaderStyle
 import dev.zhenlong.reader.ui.BarIcon
 import dev.zhenlong.reader.ui.BarIconInset
 import dev.zhenlong.reader.ui.OnePx
+import dev.zhenlong.reader.ui.currentTime
 import dev.zhenlong.reader.ui.PagerFooter
 import dev.zhenlong.reader.ui.ScreenMargin
 import dev.zhenlong.reader.ui.launchOrToast
 import dev.zhenlong.reader.ui.verticalPageSwipe
-import java.util.Date
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
@@ -92,6 +95,7 @@ import org.readium.r2.shared.util.AbsoluteUrl
 
 private const val NAVIGATOR_TAG = "epub-navigator"
 private val FooterHeight = 22.dp
+internal val HeaderHeight = FooterHeight
 
 /**
  * 版心下方、页脚上方还要垫多少 dp。页脚本身已经占了 [FooterHeight]，把它算进下边距里：
@@ -99,6 +103,10 @@ private val FooterHeight = 22.dp
  */
 internal fun bottomMarginDp(verticalMarginDp: Int): Int =
     (verticalMarginDp - FooterHeight.value.toInt()).coerceAtLeast(0) + FOOTER_GAP_DP
+
+/** 有页眉（章名）时版心上方的垫高，和 [bottomMarginDp] 对称：页眉算进上边距，版心仍在正中。 */
+internal fun topMarginDp(verticalMarginDp: Int): Int =
+    (verticalMarginDp - HeaderHeight.value.toInt()).coerceAtLeast(0) + FOOTER_GAP_DP
 
 private const val FOOTER_GAP_DP = 6
 private const val REFLOW_SETTLE_MS = 600L
@@ -113,7 +121,11 @@ private const val PAGE_INFO_JS =
     "(function(){var w=window.innerWidth,e=document.scrollingElement;" +
         "return Math.round(Math.abs(e.scrollLeft)/w)+','+Math.round(e.scrollWidth/w);})()"
 
-internal enum class Panel(val label: String) { FONT_SIZE("字号"), FONT("字体"), WEIGHT("粗细"), LINE_HEIGHT("行距"), MARGIN("边距") }
+/**
+ * 底栏的两个面板（用户 2026-11-01 要求把字号 / 字体 / 粗细 / 行距 / 边距重新归组）：
+ * 字体 = 字体 · 字号 · 粗细（字本身）；版式 = 行距 · 左右 · 上下（字在页上怎么排）。[FONT_LIST] 是从「字体」那一行点进去的字体列表。
+ */
+internal enum class Panel { TYPE, LAYOUT, FONT_LIST }
 
 internal sealed interface Chrome {
     data object Hidden : Chrome
@@ -124,6 +136,8 @@ internal sealed interface Chrome {
 /** 全书的当前页 / 总页数（估算，见 [PageEstimator]）。 */
 internal data class PageInfo(val page: Int, val pages: Int) {
     override fun toString() = "$page/$pages"
+    /** 全书读到百分之几：最后一页是 100，第一页至少 1（翻开了就不写 0）。 */
+    val percent: Int get() = if (pages <= 0) 0 else (page * 100 / pages).coerceIn(1, 100)
 }
 
 private fun Pair<Int, Int>?.toPageInfo() = this?.let { PageInfo(it.first, it.second) }
@@ -217,7 +231,7 @@ private fun ReaderContent(ready: ReaderState.Ready, vm: ReaderViewModel, onMode:
     BackHandler {
         when (val c = chrome) {
             Chrome.Hidden -> exit()
-            is Chrome.Bars -> chrome = if (c.panel != null) Chrome.Bars() else Chrome.Hidden
+            is Chrome.Bars -> chrome = when (c.panel) { null -> Chrome.Hidden; Panel.FONT_LIST -> Chrome.Bars(Panel.TYPE); else -> Chrome.Bars() }
             Chrome.Toc -> chrome = Chrome.Bars()
         }
     }
@@ -372,39 +386,35 @@ private fun ReaderStyle.toPreferences(fonts: List<UserFont>) = EpubPreferences(
     pageMargins = pageMargins,
 )
 
-/** 页脚：左系统时间，右全书的「当前页/总页数」。 */
+/** 页脚：左系统时间，右全书的「当前页/总页数 · 百分比」（用户 2026-10-29 要的全书进度；和书架上的进度同源）。 */
 @Composable
 internal fun PageFooter(info: PageInfo?) {
-    Row(
-        Modifier.fillMaxWidth().height(FooterHeight).padding(horizontal = ScreenMargin),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(currentTime(), Modifier.weight(1f), fontSize = 10.sp)
-        Text(info?.toString().orEmpty(), fontSize = 10.sp)
+    Box(Modifier.fillMaxWidth().height(FooterHeight).padding(horizontal = ScreenMargin)) {
+        Text(currentTime(), Modifier.align(Alignment.CenterStart), fontSize = 10.sp)
+        Text(info?.let { "$it · ${it.percent}%" }.orEmpty(), Modifier.align(Alignment.CenterEnd), fontSize = 10.sp)
     }
 }
 
-/** 跟着系统的 TIME_TICK 广播每分钟变一次：自己不起定时器，不在阅读页时也不监听。 */
+/** 页眉：左上角的章名（目录里的标题，文字模式才有；用户 2026-10-29 指定从页脚移上来）。 */
 @Composable
-private fun currentTime(): String {
-    val context = LocalContext.current
-    val format = remember { DateFormat.getTimeFormat(context) }   // 跟随系统的 12 / 24 小时制
-    var now by remember { mutableStateOf(format.format(Date())) }
-    DisposableEffect(Unit) {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(c: Context, intent: Intent) {
-                now = format.format(Date())
-            }
-        }
-        context.registerReceiver(receiver, IntentFilter(Intent.ACTION_TIME_TICK).apply { addAction(Intent.ACTION_TIME_CHANGED) })
-        now = format.format(Date())
-        onDispose { context.unregisterReceiver(receiver) }
+internal fun PageHeader(chapter: String?) {
+    Box(Modifier.fillMaxWidth().height(HeaderHeight).padding(horizontal = ScreenMargin)) {
+        Text(
+            chapter.orEmpty(),
+            Modifier.align(Alignment.CenterStart),
+            fontSize = 10.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
-    return now
 }
 
 @Composable
 private fun Rule() = Box(Modifier.fillMaxWidth().height(OnePx).background(Color.Black))
+
+private val BottomButtonWidth = 64.dp
+private val PanelRowHeight = 52.dp
+private val PanelLabelWidth = 40.dp
 
 /** 工具条是盖在书页上的 overlay，出现 / 消失只重绘自己那两条（SPEC §2.5）。 */
 @Composable
@@ -443,28 +453,23 @@ internal fun Bars(
         Column(Modifier.align(Alignment.BottomCenter).background(Color.White).then(swallowTaps)) {
             Rule()
             when (panel) {
-                Panel.FONT_SIZE -> StepSlider(ReaderStyle.FONT_STEPS, style.fontSizeStep) { onStyle(style.copy(fontSizeStep = it)) }
-                Panel.FONT -> FontPanel(style, fonts, onStyle, onPickFontsFolder)
-                Panel.WEIGHT -> StepSlider(ReaderStyle.WEIGHT_STEPS, style.fontWeightStep) { onStyle(style.copy(fontWeightStep = it)) }
-                Panel.LINE_HEIGHT -> StepSlider(ReaderStyle.LINE_STEPS, style.lineHeightStep) { onStyle(style.copy(lineHeightStep = it)) }
-                Panel.MARGIN -> {
-                    StepSlider(ReaderStyle.MARGIN_STEPS, style.marginStep, "左右") { onStyle(style.copy(marginStep = it)) }
-                    StepSlider(ReaderStyle.VERTICAL_MARGIN_STEPS, style.verticalMarginStep, "上下") {
-                        onStyle(style.copy(verticalMarginStep = it))
-                    }
-                }
+                Panel.TYPE -> TypePanel(mode, style, fonts, onStyle) { onPanel(Panel.FONT_LIST) }
+                Panel.FONT_LIST -> FontPanel(style, fonts, onStyle, onPickFontsFolder) { onPanel(Panel.TYPE) }
+                Panel.LAYOUT -> LayoutPanel(mode, style, onStyle)
                 null -> {}
             }
-            if (panel != null && panel != Panel.FONT) Rule()   // 字体面板自带
-            Row(Modifier.fillMaxWidth().height(56.dp)) {
-                // 漫画没有字，字号 / 字体 / 行距不出现；粗细只有原生引擎能做（Readium 3.3.0 的 fontWeight 是空实现）
-                val panels = when (mode) {
-                    BookKind.MANGA -> listOf(Panel.MARGIN)
-                    BookKind.WEB -> Panel.entries - Panel.WEIGHT
-                    BookKind.TEXT -> Panel.entries
+            if (panel != null) Rule()
+            // 左：目录（去哪儿）；右：字体 / 版式（长什么样）。两组意思不同，中间用留白隔开。漫画没有字，只有版式
+            Row(
+                Modifier.fillMaxWidth().height(64.dp).padding(horizontal = ScreenMargin - (BottomButtonWidth - 24.dp) / 2),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                BottomButton(R.drawable.ic_toc, "目录", selected = false, onClick = onToc)
+                Spacer(Modifier.weight(1f))
+                if (mode != BookKind.MANGA) {
+                    BottomButton(R.drawable.ic_type, "字体", panel == Panel.TYPE || panel == Panel.FONT_LIST) { onPanel(Panel.TYPE) }
                 }
-                panels.forEach { p -> BarButton(p.label, selected = p == panel) { onPanel(p) } }
-                BarButton("目录", onClick = onToc)
+                BottomButton(R.drawable.ic_layout, "版式", panel == Panel.LAYOUT) { onPanel(Panel.LAYOUT) }
             }
         }
     }
@@ -477,18 +482,87 @@ private fun ModeButton(label: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
+/** 图标在上、字在下；打开着的面板，字加下划线（和顶栏的模式切换一个说法）。 */
 @Composable
-private fun androidx.compose.foundation.layout.RowScope.BarButton(label: String, selected: Boolean = false, onClick: () -> Unit) {
-    Box(Modifier.weight(1f).fillMaxSize().clickable(onClick = onClick), contentAlignment = Alignment.Center) {
-        Text(label, fontSize = 15.sp, textDecoration = if (selected) TextDecoration.Underline else null)
+private fun BottomButton(icon: Int, label: String, selected: Boolean, onClick: () -> Unit) {
+    Column(
+        Modifier.width(BottomButtonWidth).fillMaxHeight().clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Image(painterResource(icon), null, Modifier.size(24.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(label, fontSize = 12.sp, lineHeight = 14.sp, textDecoration = if (selected) TextDecoration.Underline else null)
     }
 }
 
+/** 字体面板：字体（点进列表）· 字号 · 粗细。粗细只有原生引擎能做（Readium 3.3.0 的 fontWeight 是空实现）。 */
+@Composable
+private fun TypePanel(mode: BookKind, style: ReaderStyle, fonts: List<UserFont>, onStyle: (ReaderStyle) -> Unit, onFontList: () -> Unit) {
+    val fontName = when (style.font) {
+        ReaderFont.CUSTOM -> fonts.firstOrNull { it.fileName == style.customFont }?.name ?: ReaderFont.PUBLISHER.label
+        else -> style.font.label
+    }
+    Row(
+        Modifier.fillMaxWidth().height(PanelRowHeight).clickable(onClick = onFontList).padding(horizontal = ScreenMargin),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PanelLabel("字体")
+        Text(fontName, Modifier.weight(1f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, textAlign = TextAlign.End)
+        Spacer(Modifier.width(4.dp))
+        Image(painterResource(R.drawable.ic_chevron_right), null, Modifier.size(20.dp))
+    }
+    StepSlider(
+        "字号", ReaderStyle.FONT_STEPS, style.fontSizeStep,
+        less = { Text("A", fontSize = 13.sp) },
+        more = { Text("A", fontSize = 21.sp) },
+    ) { onStyle(style.copy(fontSizeStep = it)) }
+    if (mode == BookKind.TEXT) {
+        StepSlider(
+            "粗细", ReaderStyle.WEIGHT_STEPS, style.fontWeightStep,
+            less = { Text("A", fontSize = 17.sp, fontWeight = FontWeight.Light) },
+            more = { Text("A", fontSize = 17.sp, fontWeight = FontWeight.Black) },
+        ) { onStyle(style.copy(fontWeightStep = it)) }
+    }
+}
+
+/** 版式面板：行距 · 左右 · 上下。两端是示意图标：紧 / 松的行、窄 / 宽的页边。漫画没有字，不出现行距。 */
+@Composable
+private fun LayoutPanel(mode: BookKind, style: ReaderStyle, onStyle: (ReaderStyle) -> Unit) {
+    if (mode != BookKind.MANGA) {
+        StepSlider(
+            "行距", ReaderStyle.LINE_STEPS, style.lineHeightStep,
+            less = { SliderIcon(R.drawable.ic_lines_tight) },
+            more = { SliderIcon(R.drawable.ic_lines_loose) },
+        ) { onStyle(style.copy(lineHeightStep = it)) }
+    }
+    StepSlider(
+        "左右", ReaderStyle.MARGIN_STEPS, style.marginStep,
+        less = { SliderIcon(R.drawable.ic_margin_h_narrow) },
+        more = { SliderIcon(R.drawable.ic_margin_h_wide) },
+    ) { onStyle(style.copy(marginStep = it)) }
+    StepSlider(
+        "上下", ReaderStyle.VERTICAL_MARGIN_STEPS, style.verticalMarginStep,
+        less = { SliderIcon(R.drawable.ic_margin_v_narrow) },
+        more = { SliderIcon(R.drawable.ic_margin_v_wide) },
+    ) { onStyle(style.copy(verticalMarginStep = it)) }
+}
+
+@Composable
+private fun PanelLabel(text: String) {
+    Text(text, Modifier.width(PanelLabelWidth), fontSize = 13.sp, color = PanelLabelGray)
+}
+
+private val PanelLabelGray = Color(0xFF5A5A5A)   // 和书架说明文字同一档灰：标签让位给数值和控件
+
+@Composable
+private fun SliderIcon(resId: Int) = Image(painterResource(resId), null, Modifier.size(22.dp))
+
 private class FontChoice(val label: String, val selected: Boolean, val onPick: () -> Unit)
 
-/** 字体：内置三种 + 字体文件夹里的文件，竖排、整屏分页；末项用来授权 / 更换字体文件夹。 */
+/** 字体列表：内置三种 + 字体文件夹里的文件，竖排、整屏分页；末项用来授权 / 更换字体文件夹。顶上一行返回字体面板。 */
 @Composable
-private fun FontPanel(style: ReaderStyle, fonts: List<UserFont>, onStyle: (ReaderStyle) -> Unit, onPickFolder: () -> Unit) {
+private fun FontPanel(style: ReaderStyle, fonts: List<UserFont>, onStyle: (ReaderStyle) -> Unit, onPickFolder: () -> Unit, onBack: () -> Unit) {
     val choices = listOf(ReaderFont.PUBLISHER, ReaderFont.SERIF, ReaderFont.SANS).map { f ->
         FontChoice(f.label, style.font == f) { onStyle(style.copy(font = f, customFont = null)) }
     } + fonts.map { f ->
@@ -502,43 +576,58 @@ private fun FontPanel(style: ReaderStyle, fonts: List<UserFont>, onStyle: (Reade
     val current = page.coerceIn(0, pageCount - 1)
     val turn = { delta: Int -> page = (current + delta).coerceIn(0, pageCount - 1) }
 
+    Row(
+        Modifier.fillMaxWidth().height(PanelRowHeight).padding(horizontal = ScreenMargin - BarIconInset),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BarIcon(R.drawable.ic_back, "返回", onBack)
+        Text("字体", fontSize = 15.sp)
+    }
     Column(Modifier.fillMaxWidth().verticalPageSwipe(current, pageCount) { turn(it) }) {
         // 行数固定：翻到不满的一页时面板高度不跳
         val rows = if (pageCount > 1) FONT_ROWS else choices.size
         for (i in 0 until rows) {
             val choice = choices.getOrNull(current * FONT_ROWS + i)
-            Box(
+            Row(
                 Modifier.fillMaxWidth().height(48.dp)
                     .then(if (choice != null) Modifier.clickable(onClick = choice.onPick) else Modifier)
                     .padding(horizontal = ScreenMargin),
-                contentAlignment = Alignment.CenterStart,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (choice != null) {
-                    Text(
-                        choice.label,
-                        fontSize = 15.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.MiddleEllipsis,
-                        textDecoration = if (choice.selected) TextDecoration.Underline else null,
-                    )
+                    Text(choice.label, Modifier.weight(1f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
+                    // 选中的那一项右侧打勾：比下划线好认，也不和「可点」的链接样式混淆
+                    if (choice.selected) Image(painterResource(R.drawable.ic_check), "当前字体", Modifier.size(20.dp))
                 }
             }
         }
         if (pageCount > 1) PagerFooter(current, pageCount) { turn(it) }
     }
-    Rule()
 }
 
 /**
- * 离散滑动条：− ——●—— +。拖动时只有滑块在动（局部重绘），松手才提交，正文只重排一次。
+ * 离散滑动条：标签 · 小端 ——●—— 大端。两端可点、一次一档；拖动时只有滑块在动（局部重绘），松手才提交，正文只重排一次。
  */
 @Composable
-private fun StepSlider(steps: Int, value: Int, label: String? = null, onChange: (Int) -> Unit) {
+private fun StepSlider(
+    label: String,
+    steps: Int,
+    value: Int,
+    less: @Composable () -> Unit,
+    more: @Composable () -> Unit,
+    onChange: (Int) -> Unit,
+) {
     var dragging by remember { mutableStateOf<Int?>(null) }
     val shown = dragging ?: value
-    Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = ScreenMargin - BarIconInset), verticalAlignment = Alignment.CenterVertically) {
-        if (label != null) Text(label, Modifier.padding(start = BarIconInset, end = 4.dp), fontSize = 13.sp)
-        SliderEnd("−") { if (value > 0) onChange(value - 1) }
+    // 手势处理器只按 steps 建一次，里面要调「最新」的回调：同一面板里有好几条滑块，
+    // 先调字号再拖粗细时，旧闭包里的 style 还是打开面板时的，会把字号冲回去
+    val latestOnChange by rememberUpdatedState(onChange)
+    Row(
+        Modifier.fillMaxWidth().height(PanelRowHeight).padding(start = ScreenMargin, end = ScreenMargin - BarIconInset),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PanelLabel(label)
+        SliderEnd(content = less) { if (value > 0) onChange(value - 1) }
         Canvas(
             Modifier.weight(1f).fillMaxHeight().pointerInput(steps) {
                 val inset = SliderThumbRadius.toPx()
@@ -553,27 +642,30 @@ private fun StepSlider(steps: Int, value: Int, label: String? = null, onChange: 
                         change.consume()
                     }
                     dragging = null
-                    onChange(step)
+                    latestOnChange(step)
                 }
             },
         ) {
             val inset = SliderThumbRadius.toPx()
             val y = size.height / 2
             val span = size.width - inset * 2
+            val thumbX = inset + span * shown / (steps - 1)
+            // 已选的一段画粗黑、其余细线：一眼看出「在哪一档」，不用数刻度
             drawLine(Color.Black, Offset(inset, y), Offset(size.width - inset, y), strokeWidth = 1f)
+            drawLine(Color.Black, Offset(inset, y), Offset(thumbX, y), strokeWidth = 2.dp.toPx())
             for (i in 0 until steps) {
                 val x = inset + span * i / (steps - 1)
-                drawLine(Color.Black, Offset(x, y - 4.dp.toPx()), Offset(x, y + 4.dp.toPx()), strokeWidth = 1f)
+                drawLine(Color.Black, Offset(x, y - 3.dp.toPx()), Offset(x, y + 3.dp.toPx()), strokeWidth = 1f)
             }
-            drawCircle(Color.Black, inset, Offset(inset + span * shown / (steps - 1), y))
+            drawCircle(Color.Black, inset, Offset(thumbX, y))
         }
-        SliderEnd("+") { if (value < steps - 1) onChange(value + 1) }
+        SliderEnd(content = more) { if (value < steps - 1) onChange(value + 1) }
     }
 }
 
 @Composable
-private fun SliderEnd(label: String, onClick: () -> Unit) {
-    Box(Modifier.size(48.dp).clickable(onClick = onClick), contentAlignment = Alignment.Center) { Text(label, fontSize = 18.sp) }
+private fun SliderEnd(content: @Composable () -> Unit, onClick: () -> Unit) {
+    Box(Modifier.size(48.dp).clickable(onClick = onClick), contentAlignment = Alignment.Center) { content() }
 }
 
 internal class TocEntry(val link: Link, val depth: Int)
