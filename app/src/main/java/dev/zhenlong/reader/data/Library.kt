@@ -1,7 +1,6 @@
 package dev.zhenlong.reader.data
 
 import dev.zhenlong.reader.scan.NaturalOrder
-import kotlin.math.roundToInt
 
 sealed interface ShelfItem {
     val key: String
@@ -48,12 +47,6 @@ fun shelfProgress(item: ShelfItem, reads: Map<String, ReadState>): Float? {
 private fun lastRead(item: ShelfItem, reads: Map<String, ReadState>): ReadState? = when (item) {
     is ShelfItem.Single -> reads[item.book.id]
     is ShelfItem.Set -> item.volumeIds.mapNotNull(reads::get).maxByOrNull { it.lastOpenedAt }
-}
-
-/** 进度条旁的数字。最后一页算读完；读过一点就至少 1%（一套 27 卷读了第 1 卷的开头，写 0% 像没读过）。文字书的进度是估算页码，小幅跳动正常。 */
-fun progressLabel(progress: Float): String {
-    if (progress >= 0.995f) return "已读完"
-    return "${(progress * 100).roundToInt().coerceIn(if (progress > 0f) 1 else 0, 99)}%"
 }
 
 /** 排好序的书库快照（SPEC §4 排序规则）。 */

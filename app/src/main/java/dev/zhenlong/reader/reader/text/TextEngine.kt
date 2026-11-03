@@ -117,6 +117,11 @@ class TextEngine(
 
     fun chapterOf(documentPath: String): Int? = documents.indexOf(documentPath).takeIf { it >= 0 }
 
+    fun documentOf(chapter: Int): String = documents[chapter]
+
+    /** 章名（目录标题；没有自己条目的文档沿用前一个）：划线列表用。 */
+    fun titleOf(chapter: Int): String? = footerTitles.getOrNull(chapter)
+
     private fun load() {
         if (loader?.isActive == true) return
         loader = scope.launch {

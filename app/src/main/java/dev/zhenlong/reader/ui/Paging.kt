@@ -1,6 +1,12 @@
 package dev.zhenlong.reader.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -58,3 +64,29 @@ internal fun PagerFooter(page: Int, pageCount: Int, label: String? = null, heigh
         }
     }
 }
+
+/**
+ * 右边距里的滚动提示条（用户 2026-11-03，取代底部「1 / 2」；书架、目录共用）：一道 [EdgeGray] 细轨，黑色滑块长 = 轨长 / 屏数，位置 = 第几屏。
+ * [modifier] 定位置和高度：通常是一条 [ScreenMargin] 宽、和内容上下对齐的竖条。整条边距可点：点滑块上方上一屏、下方下一屏。不画箭头：上下滑本来就能翻。
+ */
+@Composable
+internal fun PageScrollbar(page: Int, pageCount: Int, modifier: Modifier, onTurn: (Int) -> Unit) {
+    BoxWithConstraints(modifier) {
+        val thumb = (maxHeight / pageCount).coerceAtLeast(ScrollThumbMin)
+        val top = (maxHeight - thumb) * (page.toFloat() / (pageCount - 1))
+        Box(
+            Modifier.fillMaxSize().pointerInput(page, pageCount) {
+                detectTapGestures { at -> onTurn(if (at.y < (top + thumb / 2).toPx()) -1 else 1) }
+            },
+        ) {
+            Box(Modifier.align(Alignment.TopCenter).width(OnePx).fillMaxHeight().background(EdgeGray))
+            Box(
+                Modifier.align(Alignment.TopCenter).padding(top = top).width(ScrollThumbWidth).height(thumb)
+                    .background(Color.Black, RoundedCornerShape(50)),
+            )
+        }
+    }
+}
+
+private val ScrollThumbWidth = 3.dp
+private val ScrollThumbMin = 24.dp

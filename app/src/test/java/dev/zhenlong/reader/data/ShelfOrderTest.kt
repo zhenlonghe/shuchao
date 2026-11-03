@@ -44,14 +44,4 @@ class ShelfOrderTest {
         assertEquals(12.5f / 91, shelfProgress(onePiece, reads)!!, 1e-6f)
         assertNull(shelfProgress(onePiece, emptyMap()))
     }
-
-    @Test fun labels() {
-        assertEquals("0%", progressLabel(0f))
-        assertEquals("1%", progressLabel(0.003f))   // 读过一点就不是 0%
-        assertEquals("67%", progressLabel(0.674f))
-        assertEquals("68%", progressLabel(0.675f))
-        assertEquals("99%", progressLabel(0.99f))
-        assertEquals("已读完", progressLabel(0.995f))
-        assertEquals("已读完", progressLabel(1f))
-    }
 }

@@ -13,6 +13,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.Image
@@ -45,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextDecoration
@@ -69,8 +71,17 @@ import dev.zhenlong.reader.data.ReaderStyle
 import dev.zhenlong.reader.ui.BarIcon
 import dev.zhenlong.reader.ui.BarIconInset
 import dev.zhenlong.reader.ui.OnePx
+import dev.zhenlong.reader.ui.EdgeGray
+import dev.zhenlong.reader.ui.PageScrollbar
+import androidx.compose.runtime.produceState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import dev.zhenlong.reader.ui.batteryPercent
 import dev.zhenlong.reader.ui.currentTime
-import dev.zhenlong.reader.ui.PagerFooter
+import dev.zhenlong.reader.ui.minuteTick
 import dev.zhenlong.reader.ui.ScreenMargin
 import dev.zhenlong.reader.ui.launchOrToast
 import dev.zhenlong.reader.ui.verticalPageSwipe
@@ -86,6 +97,8 @@ import org.readium.r2.navigator.input.TapEvent
 import org.readium.r2.navigator.preferences.Color as ReadiumColor
 import org.readium.r2.navigator.preferences.ColumnCount
 import org.readium.r2.navigator.preferences.FontFamily
+import androidx.compose.ui.text.font.FontFamily as ComposeFontFamily
+import androidx.compose.ui.text.font.Typeface as ComposeTypeface
 import org.readium.r2.navigator.preferences.Theme
 import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.publication.Link
@@ -344,6 +357,7 @@ private fun ReaderContent(ready: ReaderState.Ready, vm: ReaderViewModel, onMode:
         Chrome.Hidden -> {}
         is Chrome.Bars -> Bars(
             title = ready.publication.metadata.title ?: ready.book.title,
+            author = ready.book.author,
             mode = BookKind.WEB,
             pageInfo = pageInfo,
             onMode = onMode,
@@ -356,14 +370,23 @@ private fun ReaderContent(ready: ReaderState.Ready, vm: ReaderViewModel, onMode:
             onPanel = { chrome = Chrome.Bars(it.takeIf { p -> p != c.panel }) },
             onToc = { chrome = Chrome.Toc },
         )
-        Chrome.Toc -> TocScreen(
-            entries = remember(ready) { flattenToc(ready.publication.tableOfContents) },
-            onBack = { chrome = Chrome.Bars() },
-            onPick = { link ->
-                chrome = Chrome.Hidden
-                navigator?.go(link, animated = false)
-            },
-        )
+        Chrome.Toc -> {
+            val entries = remember(ready) { flattenToc(ready.publication.tableOfContents) }
+            val current = remember(entries) {
+                val chapterOf = { path: String? -> ready.publication.readingOrder.indexOfFirst { it.url().path == path }.takeIf { it >= 0 } }
+                val here = chapterOf(vm.lastLocator?.href?.path) ?: return@remember -1
+                currentTocIndex(entries, tocPosition(here)) { entry -> chapterOf(entry.link.url().removeFragment().path)?.let { tocPosition(it) } }
+            }
+            TocScreen(
+                entries = entries,
+                current = current,
+                onBack = { chrome = Chrome.Bars() },
+                onPick = { link ->
+                    chrome = Chrome.Hidden
+                    navigator?.go(link, animated = false)
+                },
+            )
+        }
     }
 }
 
@@ -386,12 +409,41 @@ private fun ReaderStyle.toPreferences(fonts: List<UserFont>) = EpubPreferences(
     pageMargins = pageMargins,
 )
 
-/** 页脚：左系统时间，右全书的「当前页/总页数 · 百分比」（用户 2026-10-29 要的全书进度；和书架上的进度同源）。 */
+/**
+ * 页脚：左系统时间 + 小闪电和电量百分数（用户 2026-11-03，取代 11-02 的电池图标；闪电把它和右边的阅读百分比区分开），
+ * 右全书的「当前页/总页数 · 百分比」（用户 2026-10-29 要的全书进度；和书架上的进度同源）。
+ */
 @Composable
 internal fun PageFooter(info: PageInfo?) {
+    val tick = minuteTick()
     Box(Modifier.fillMaxWidth().height(FooterHeight).padding(horizontal = ScreenMargin)) {
-        Text(currentTime(), Modifier.align(Alignment.CenterStart), fontSize = 10.sp)
+        Row(Modifier.align(Alignment.CenterStart), verticalAlignment = Alignment.CenterVertically) {
+            Text(currentTime(tick), fontSize = 10.sp)
+            Spacer(Modifier.width(8.dp))
+            Bolt()
+            Spacer(Modifier.width(2.dp))
+            Text("${batteryPercent(tick)}%", fontSize = 10.sp)
+        }
         Text(info?.let { "$it · ${it.percent}%" }.orEmpty(), Modifier.align(Alignment.CenterEnd), fontSize = 10.sp)
+    }
+}
+
+/** 电量前的小闪电：实心黑色，比 10sp 的数字略矮，和数字的字身对齐。 */
+@Composable
+private fun Bolt() {
+    Canvas(Modifier.size(width = 5.dp, height = 8.dp)) {
+        val w = size.width
+        val h = size.height
+        val path = Path().apply {
+            moveTo(w * 0.62f, 0f)
+            lineTo(0f, h * 0.58f)
+            lineTo(w * 0.44f, h * 0.58f)
+            lineTo(w * 0.34f, h)
+            lineTo(w, h * 0.40f)
+            lineTo(w * 0.56f, h * 0.40f)
+            close()
+        }
+        drawPath(path, Color.Black)
     }
 }
 
@@ -420,6 +472,7 @@ private val PanelLabelWidth = 40.dp
 @Composable
 internal fun Bars(
     title: String,
+    author: String?,
     mode: BookKind,
     pageInfo: PageInfo?,
     onMode: (BookKind) -> Unit,
@@ -440,7 +493,20 @@ internal fun Bars(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 BarIcon(R.drawable.ic_back, "返回", onBack)
-                Text(title, Modifier.weight(1f).padding(end = BarIconInset), fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // 书名旁边灰字写作者（用户 2026-11-02：作者平时不显示，呼出工具条时看一眼就够）。书名优先，作者最多占一截
+                Row(Modifier.weight(1f).padding(end = BarIconInset), verticalAlignment = Alignment.Bottom) {
+                    Text(title, Modifier.weight(1f, fill = false), fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (!author.isNullOrBlank()) {
+                        Text(
+                            author,
+                            Modifier.padding(start = 8.dp, bottom = 1.dp).widthIn(max = 120.dp),
+                            fontSize = 13.sp,
+                            color = PanelLabelGray,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
                 if (mode == BookKind.MANGA) Text(pageInfo?.toString().orEmpty(), Modifier.padding(end = 8.dp), fontSize = 13.sp)
                 // 当前模式加下划线。文字 = 原生排版（快）；原版 = Readium / WebView，还原出版商的版式（慢）；漫画 = 整页图
                 ModeButton("文字", mode == BookKind.TEXT) { onMode(BookKind.TEXT) }
@@ -482,7 +548,10 @@ private fun ModeButton(label: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** 图标在上、字在下；打开着的面板，字加下划线（和顶栏的模式切换一个说法）。 */
+/**
+ * 只有图标（用户 2026-11-03：三个按钮认得出，不用再写字；[label] 只给无障碍读）。
+ * 打开着的面板，图标下面画一道短横线（和顶栏模式切换的下划线一个说法）。
+ */
 @Composable
 private fun BottomButton(icon: Int, label: String, selected: Boolean, onClick: () -> Unit) {
     Column(
@@ -490,17 +559,20 @@ private fun BottomButton(icon: Int, label: String, selected: Boolean, onClick: (
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Image(painterResource(icon), null, Modifier.size(24.dp))
-        Spacer(Modifier.height(4.dp))
-        Text(label, fontSize = 12.sp, lineHeight = 14.sp, textDecoration = if (selected) TextDecoration.Underline else null)
+        Spacer(Modifier.height(BottomMarkGap + 2.dp))   // 和下面那道横线对称，图标落在正中
+        Image(painterResource(icon), label, Modifier.size(24.dp))
+        Spacer(Modifier.height(BottomMarkGap))
+        Box(Modifier.width(16.dp).height(2.dp).background(if (selected) Color.Black else Color.Transparent))
     }
 }
+
+private val BottomMarkGap = 6.dp
 
 /** 字体面板：字体（点进列表）· 字号 · 粗细。粗细只有原生引擎能做（Readium 3.3.0 的 fontWeight 是空实现）。 */
 @Composable
 private fun TypePanel(mode: BookKind, style: ReaderStyle, fonts: List<UserFont>, onStyle: (ReaderStyle) -> Unit, onFontList: () -> Unit) {
     val fontName = when (style.font) {
-        ReaderFont.CUSTOM -> fonts.firstOrNull { it.fileName == style.customFont }?.name ?: ReaderFont.PUBLISHER.label
+        ReaderFont.CUSTOM -> fonts.firstOrNull { it.fileName == style.customFont }?.let(FontNames::of) ?: ReaderFont.PUBLISHER.label
         else -> style.font.label
     }
     Row(
@@ -558,23 +630,48 @@ private val PanelLabelGray = Color(0xFF5A5A5A)   // 和书架说明文字同一�
 @Composable
 private fun SliderIcon(resId: Int) = Image(painterResource(resId), null, Modifier.size(22.dp))
 
-private class FontChoice(val label: String, val selected: Boolean, val onPick: () -> Unit)
+private class FontChoice(val label: String, val family: ComposeFontFamily?, val selected: Boolean, val hint: Boolean = false, val onPick: () -> Unit)
 
-/** 字体列表：内置三种 + 字体文件夹里的文件，竖排、整屏分页；末项用来授权 / 更换字体文件夹。顶上一行返回字体面板。 */
+/**
+ * 字体列表（用户 2026-11-03，参考微信读书）：三列方块，每块用那个字体本身写出它的名字（name 表里的家族名，见 [FontNames]）。
+ * 内置三种在前，字体文件夹里的随后，末块用来授权 / 更换字体文件夹。一屏放不下就整屏分页，右边距里是和书架同款的滚动提示条。
+ * 选中的那块描黑粗边，其余 #999 细边（不铺灰底：彩膜上浅灰底就是白）。字体名和 Typeface 在 IO 线程按屏读，读好之前先用文件名、默认字体。
+ */
 @Composable
 private fun FontPanel(style: ReaderStyle, fonts: List<UserFont>, onStyle: (ReaderStyle) -> Unit, onPickFolder: () -> Unit, onBack: () -> Unit) {
-    val choices = listOf(ReaderFont.PUBLISHER, ReaderFont.SERIF, ReaderFont.SANS).map { f ->
-        FontChoice(f.label, style.font == f) { onStyle(style.copy(font = f, customFont = null)) }
-    } + fonts.map { f ->
-        FontChoice(f.name, style.font == ReaderFont.CUSTOM && style.customFont == f.fileName) {
-            onStyle(style.copy(font = ReaderFont.CUSTOM, customFont = f.fileName))
-        }
-    } + FontChoice(if (fonts.isEmpty()) "选择字体文件夹…" else "更换字体文件夹…", false, onPickFolder)
-
-    val pageCount = (choices.size + FONT_ROWS - 1) / FONT_ROWS
-    var page by remember { mutableIntStateOf(choices.indexOfFirst { it.selected }.coerceAtLeast(0) / FONT_ROWS) }
+    val context = LocalContext.current
+    val perPage = FONT_ROWS * FONT_COLUMNS
+    val count = 3 + fonts.size + 1
+    val pageCount = (count + perPage - 1) / perPage
+    val selectedIndex = when (style.font) {
+        ReaderFont.PUBLISHER -> 0
+        ReaderFont.SERIF -> 1
+        ReaderFont.SANS -> 2
+        ReaderFont.CUSTOM -> fonts.indexOfFirst { it.fileName == style.customFont }.takeIf { it >= 0 }?.plus(3) ?: 0
+    }
+    var page by remember { mutableIntStateOf(selectedIndex / perPage) }
     val current = page.coerceIn(0, pageCount - 1)
     val turn = { delta: Int -> page = (current + delta).coerceIn(0, pageCount - 1) }
+
+    // 这一屏的用户字体：名字 + Typeface。一次读完一屏再换上，只多刷一次
+    val pageFonts = fonts.drop((current * perPage - 3).coerceAtLeast(0)).take(perPage)
+    val loaded by produceState<Map<String, Pair<String, ComposeFontFamily?>>>(emptyMap(), pageFonts) {
+        value = withContext(Dispatchers.IO) {
+            pageFonts.associate { f ->
+                f.fileName to (FontNames.resolve(context, f) to FontNames.typeface(context, f)?.let { ComposeFontFamily(ComposeTypeface(it)) })
+            }
+        }
+    }
+    val choices = listOf(
+        FontChoice(ReaderFont.PUBLISHER.label, ComposeFontFamily.Default, style.font == ReaderFont.PUBLISHER) { onStyle(style.copy(font = ReaderFont.PUBLISHER, customFont = null)) },
+        FontChoice(ReaderFont.SERIF.label, ComposeFontFamily.Serif, style.font == ReaderFont.SERIF) { onStyle(style.copy(font = ReaderFont.SERIF, customFont = null)) },
+        FontChoice(ReaderFont.SANS.label, ComposeFontFamily.SansSerif, style.font == ReaderFont.SANS) { onStyle(style.copy(font = ReaderFont.SANS, customFont = null)) },
+    ) + fonts.map { f ->
+        val info = loaded[f.fileName]
+        FontChoice(info?.first ?: FontNames.of(f), info?.second, style.font == ReaderFont.CUSTOM && style.customFont == f.fileName) {
+            onStyle(style.copy(font = ReaderFont.CUSTOM, customFont = f.fileName))
+        }
+    } + FontChoice(if (fonts.isEmpty()) "选择字体文件夹…" else "更换字体文件夹…", null, false, hint = true, onPick = onPickFolder)
 
     Row(
         Modifier.fillMaxWidth().height(PanelRowHeight).padding(horizontal = ScreenMargin - BarIconInset),
@@ -583,27 +680,56 @@ private fun FontPanel(style: ReaderStyle, fonts: List<UserFont>, onStyle: (Reade
         BarIcon(R.drawable.ic_back, "返回", onBack)
         Text("字体", fontSize = 15.sp)
     }
-    Column(Modifier.fillMaxWidth().verticalPageSwipe(current, pageCount) { turn(it) }) {
-        // 行数固定：翻到不满的一页时面板高度不跳
-        val rows = if (pageCount > 1) FONT_ROWS else choices.size
-        for (i in 0 until rows) {
-            val choice = choices.getOrNull(current * FONT_ROWS + i)
-            Row(
-                Modifier.fillMaxWidth().height(48.dp)
-                    .then(if (choice != null) Modifier.clickable(onClick = choice.onPick) else Modifier)
-                    .padding(horizontal = ScreenMargin),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (choice != null) {
-                    Text(choice.label, Modifier.weight(1f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
-                    // 选中的那一项右侧打勾：比下划线好认，也不和「可点」的链接样式混淆
-                    if (choice.selected) Image(painterResource(R.drawable.ic_check), "当前字体", Modifier.size(20.dp))
+    Box(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth().verticalPageSwipe(current, pageCount) { turn(it) }
+                .padding(start = ScreenMargin, end = ScreenMargin, bottom = FontTileGap * 2),
+            verticalArrangement = Arrangement.spacedBy(FontTileGap),
+        ) {
+            // 行数固定：翻到不满的一页时面板高度不跳
+            val rows = if (pageCount > 1) FONT_ROWS else (count + FONT_COLUMNS - 1) / FONT_COLUMNS
+            for (r in 0 until rows) {
+                Row(horizontalArrangement = Arrangement.spacedBy(FontTileGap)) {
+                    for (c in 0 until FONT_COLUMNS) {
+                        val choice = choices.getOrNull(current * perPage + r * FONT_COLUMNS + c)
+                        Box(Modifier.weight(1f).height(FontTileHeight)) { if (choice != null) FontTile(choice) }
+                    }
                 }
             }
         }
-        if (pageCount > 1) PagerFooter(current, pageCount) { turn(it) }
+        if (pageCount > 1) {
+            PageScrollbar(
+                current, pageCount,
+                Modifier.align(Alignment.TopEnd).padding(bottom = FontTileGap * 2).width(ScreenMargin).height(FontTileHeight * FONT_ROWS + FontTileGap * (FONT_ROWS - 1)),
+            ) { turn(it) }
+        }
     }
 }
+
+@Composable
+private fun FontTile(choice: FontChoice) {
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        Modifier.fillMaxSize().clip(shape)
+            .border(if (choice.selected) 2.dp else OnePx, if (choice.selected) Color.Black else EdgeGray, shape)
+            .clickable(onClick = choice.onPick)
+            .padding(horizontal = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            choice.label,
+            fontFamily = choice.family,
+            fontSize = if (choice.hint) 14.sp else 16.sp,
+            color = if (choice.hint) PanelLabelGray else Color.Black,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private const val FONT_COLUMNS = 3
+private val FontTileHeight = 48.dp
+private val FontTileGap = 8.dp
 
 /**
  * 离散滑动条：标签 · 小端 ——●—— 大端。两端可点、一次一档；拖动时只有滑块在动（局部重绘），松手才提交，正文只重排一次。

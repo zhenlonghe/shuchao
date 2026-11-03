@@ -45,3 +45,21 @@ data class ReadState(
     val lastOpenedAt: Long,
     val progress: Float?,
 )
+
+/**
+ * 划线（只有原生「文字」模式有）。位置是 [dev.zhenlong.reader.reader.text.ChapterParser] 输出里的字符偏移，
+ * 和进度的 charOffset 同一个坐标系：改了 ChapterParser 的输出（多 / 少了字）就会错位。[text] 存一份摘录给划线列表用。
+ * 按章节文档路径（ZIP 里的条目名）记，不按章节序号：序号只是阅读顺序里的位置。
+ */
+@Entity(indices = [Index("bookId")])
+data class Highlight(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val bookId: String,
+    val document: String,
+    val startOffset: Int,
+    val endOffset: Int,
+    val color: Int,                   // HighlightColors 里的序号
+    val text: String,
+    val createdAt: Long,
+    val chapterTitle: String? = null,   // 划线时所在章的目录标题（v4 起），导出的文本文件里用；之前的划线是 null
+)

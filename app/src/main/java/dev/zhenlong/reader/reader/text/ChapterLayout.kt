@@ -3,6 +3,7 @@ package dev.zhenlong.reader.reader.text
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.text.LineBreaker
 import android.text.Layout
@@ -61,6 +62,12 @@ class PictureSpan(
         val BITMAP_PAINT = Paint(Paint.FILTER_BITMAP_FLAG)
     }
 }
+
+/** 一段要涂底色的文字（划线、正在选的选区）：章内字符区间 [start, end)，[color] 是 ARGB。 */
+class Mark(val start: Int, val end: Int, val color: Int)
+
+/** 一个字符位置在页上画在哪（版心坐标）：[x] 是字的左 / 右沿，[top] / [bottom] 是这一行字形的上下沿。 */
+class Caret(val x: Float, val top: Float, val bottom: Float)
 
 /** 一章排好版、分好页的结果。 */
 class ChapterLayout(val chapter: Int, val content: ChapterText, paint: TextPaint, width: Int, private val pageHeight: Int, lineHeight: Float) {
@@ -181,8 +188,7 @@ class ChapterLayout(val chapter: Int, val content: ChapterText, paint: TextPaint
                 continue
             }
             // letterSpacing 加在每个字的左右各一半：整体左移半个间距，首字仍贴左沿；行尾差半个间距，不到 1px
-            val glyphs = Character.codePointCount(content.text, layout.getLineStart(line), layout.getLineVisibleEnd(line)).coerceAtLeast(1)
-            val perGlyph = slack / glyphs
+            val perGlyph = perGlyph(line, slack)
             paint.letterSpacing = perGlyph / paint.textSize
             canvas.save()
             canvas.translate(-perGlyph / 2, 0f)
@@ -191,6 +197,146 @@ class ChapterLayout(val chapter: Int, val content: ChapterText, paint: TextPaint
         }
         paint.letterSpacing = 0f
         canvas.restore()
+    }
+
+    private fun perGlyph(line: Int, slack: Float): Float {
+        if (slack <= 0f) return 0f
+        val glyphs = Character.codePointCount(content.text, layout.getLineStart(line), layout.getLineVisibleEnd(line)).coerceAtLeast(1)
+        return slack / glyphs
+    }
+
+    private val markPaint = Paint()
+
+    /**
+     * 划线 / 选区的底色（版心坐标），要画在字的**下面一层**：和描边加粗的字画进同一个 Canvas 的话，
+     * 前面有一个 drawRect，HWUI 画出来的整页字就细一档（真机截图对比过，画笔设置没变），所以由界面单独一层先画。
+     */
+    fun drawMarks(canvas: Canvas, page: Int, marks: List<Mark>) {
+        if (marks.isEmpty()) return
+        val p = page.coerceIn(0, pageCount - 1)
+        val first = pageStarts[p]
+        val last = pageStarts[p + 1] - 1
+        canvas.save()
+        canvas.translate(0f, topInset(p) - layout.getLineTop(first).toFloat())
+        for (mark in marks) for (line in first..last) drawMark(canvas, line, mark)
+        canvas.restore()
+    }
+
+    private val bidiPath = Path()
+
+    /** 一段划线在第 [line] 行上的底色（排版坐标），只涂字形的上下沿（[glyphBox]）。 */
+    private fun drawMark(canvas: Canvas, line: Int, mark: Mark) {
+        val from = maxOf(mark.start, layout.getLineStart(line))
+        val to = minOf(mark.end, layout.getLineVisibleEnd(line))
+        if (from >= to) return
+        val (glyphTop, glyphBottom) = glyphBox(line)
+        markPaint.color = mark.color
+        if (hasRtl(line)) {
+            // 阿拉伯文 / 希伯来文等：字符偏移和 x 不同向，双向混排时选区还会断成几段。交给 Layout 算可视选区
+            // （这种行不做齐尾，见 justifySlack，所以和画出来的字对得上）
+            bidiPath.reset()
+            layout.getSelectionPath(from, to, bidiPath)
+            canvas.save()
+            canvas.clipRect(0f, glyphTop, layout.width.toFloat(), glyphBottom)
+            canvas.drawPath(bidiPath, markPaint)
+            canvas.restore()
+        } else {
+            val pg = perGlyph(line, justifySlack(line))
+            canvas.drawRect(drawnX(line, from, pg), glyphTop, drawnX(line, to, pg), glyphBottom, markPaint)
+        }
+    }
+
+    /** 这一行有没有从右往左书写的字（R / AL 类）。 */
+    private fun hasRtl(line: Int): Boolean {
+        val text = content.text
+        for (i in layout.getLineStart(line) until layout.getLineEnd(line)) {
+            when (Character.getDirectionality(text[i])) {
+                Character.DIRECTIONALITY_RIGHT_TO_LEFT, Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC -> return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * 字形的上下沿（排版坐标）：行顶到基线是字的 ascent，基线往下按画笔的 descent 比例算——
+     * 行距加大时 StaticLayout 把多出来的空都加在行底，按整行涂的话上下两行的划线会连成一片。
+     */
+    private fun glyphBox(line: Int): Pair<Float, Float> {
+        val baseline = layout.getLineBaseline(line).toFloat()
+        val ascent = -layout.getLineAscent(line).toFloat()
+        val fm = layout.paint.fontMetrics
+        val descent = ascent * fm.descent / -fm.ascent
+        return (baseline - ascent) to minOf(baseline + descent, layout.getLineBottom(line).toFloat())
+    }
+
+    /**
+     * 字符位置 [offset] 在第 [line] 行画出来的 x：排版位置 + 前面每个字多出来的齐尾间距（见 [draw]）。
+     * [offset] 正好是这一行末尾（行尾没有空白、被硬折下去的一行）时，getPrimaryHorizontal 会给出下一行行首，要用行宽。
+     */
+    private fun drawnX(line: Int, offset: Int, perGlyph: Float): Float {
+        val start = layout.getLineStart(line)
+        val x = if (offset < layout.getLineEnd(line) || line == layout.lineCount - 1) layout.getPrimaryHorizontal(offset)
+        else if (layout.getParagraphAlignment(line) == Layout.Alignment.ALIGN_NORMAL) layout.getLineMax(line)   // 含首行缩进
+        else layout.getLineRight(line)
+        return x + Character.codePointCount(content.text, start, offset.coerceAtMost(layout.getLineVisibleEnd(line)).coerceAtLeast(start)) * perGlyph
+    }
+
+    /**
+     * 字符位置在这一页上的位置（版心坐标，含 [topInset]）：选区两端的把手、划线的弹出条用。不在这一页 = null。
+     * [end] = 这是一段的结尾：落在行首时算上一行的行尾，而不是下一行的开头。
+     */
+    fun caretAt(page: Int, offset: Int, end: Boolean): Caret? {
+        val p = page.coerceIn(0, pageCount - 1)
+        val line = layout.getLineForOffset(if (end && offset > 0) offset - 1 else offset)
+        if (line < pageStarts[p] || line >= pageStarts[p + 1]) return null
+        val dy = topInset(p) - layout.getLineTop(pageStarts[p]).toFloat()
+        val (glyphTop, glyphBottom) = glyphBox(line)
+        val x = drawnX(line, offset, perGlyph(line, justifySlack(line)))
+        return Caret(x, glyphTop + dy, glyphBottom + dy)
+    }
+
+    /**
+     * 点在 (x, y)（相对这一页的版心左上角）上的字符位置；点在字的右半边算下一个位置（拖选区时手指停在字中间，选到这个字为止）。
+     * [clamp] = 点到了正文外面也就近找一行（拖选区时手指出了版心）；否则不在任何一行的文字上 = null。
+     */
+    fun offsetAt(page: Int, x: Float, y: Float, clamp: Boolean = false): Int? = hit(page, x, y, clamp)?.second
+
+    /** 手指按住的那个字（长按开始选词用）；不在字上 = null。 */
+    fun charAt(page: Int, x: Float, y: Float): Int? {
+        val (line, offset) = hit(page, x, y, clamp = false) ?: return null
+        val start = layout.getLineStart(line)
+        val left = x < drawnX(line, offset, perGlyph(line, justifySlack(line)))
+        // 光标 offset 左右两边各是哪个字：从左往右的字在光标右边是 offset、左边是 offset - 1；
+        // 从右往左的字（阿拉伯文 / 希伯来文）反过来，offset 那个字在光标左边
+        val rtl = offset < layout.getLineEnd(line) && layout.isRtlCharAt(offset)
+        val at = when {
+            rtl -> if (left) offset else offset - 1
+            left -> offset - 1
+            else -> offset
+        }
+        return at.takeIf { it >= start && it < layout.getLineVisibleEnd(line) }
+    }
+
+    private fun hit(page: Int, x: Float, y: Float, clamp: Boolean): Pair<Int, Int>? {
+        val p = page.coerceIn(0, pageCount - 1)
+        val first = pageStarts[p]
+        val last = pageStarts[p + 1] - 1
+        var line = layout.getLineForVertical(layout.getLineTop(first) + y.toInt() - topInset(p))
+        if (line !in first..last) {
+            if (!clamp) return null
+            line = line.coerceIn(first, last)
+        }
+        // 齐尾的行画出来比排出来宽，把点按位置按比例缩回排版坐标
+        val slack = justifySlack(line)
+        val xx = if (slack > 0f) x * layout.getLineMax(line) / (layout.getLineMax(line) + slack) else x
+        if (!clamp && (xx < layout.getLineLeft(line) || xx > layout.getLineRight(line))) return null
+        return line to layout.getOffsetForHorizontal(line, xx)
+    }
+
+    /** 这一页正文的字符区间 [start, end)。 */
+    fun pageRange(page: Int): IntRange {
+        val p = page.coerceIn(0, pageCount - 1)
+        return layout.getLineStart(pageStarts[p]) until layout.getLineEnd(pageStarts[p + 1] - 1)
     }
 
     /** 只画这一行：Layout 没有公开的按行画的接口，用裁剪让它只画裁剪范围里的那一行（画布已在排版坐标系里）。 */
@@ -214,20 +360,14 @@ class ChapterLayout(val chapter: Int, val content: ChapterText, paint: TextPaint
         if (layout.getParagraphAlignment(line) != Layout.Alignment.ALIGN_NORMAL) return 0f
         if (text.getSpans(start, end, PictureSpan::class.java).isNotEmpty()) return 0f
         for (i in start until layout.getLineVisibleEnd(line)) if (text[i] == ' ') return 0f
+        if (hasRtl(line)) return 0f   // 齐尾是按逻辑顺序往后推字的，对从右往左的字不成立
         val slack = layout.width - layout.getLineMax(line)   // getLineMax 含首行缩进、不含行尾空白
         return if (slack > 0f && slack <= layout.width * MAX_JUSTIFY) slack else 0f
     }
 
     /** 点在 (x, y)（相对这一页的版心左上角）上的链接。 */
     fun linkAt(page: Int, x: Float, y: Float): LinkSpan? {
-        val p = page.coerceIn(0, pageCount - 1)
-        val line = layout.getLineForVertical(layout.getLineTop(pageStarts[p]) + y.toInt() - topInset(p))
-        if (line >= pageStarts[p + 1]) return null
-        // 齐尾的行画出来比排出来宽，把点按位置按比例缩回排版坐标
-        val slack = justifySlack(line)
-        val xx = if (slack > 0f) x * layout.getLineMax(line) / (layout.getLineMax(line) + slack) else x
-        if (xx < layout.getLineLeft(line) || xx > layout.getLineRight(line)) return null
-        val offset = layout.getOffsetForHorizontal(line, xx)
+        val offset = offsetAt(page, x, y) ?: return null
         return (content.text as Spanned).getSpans(offset, offset, LinkSpan::class.java).firstOrNull()
     }
 }

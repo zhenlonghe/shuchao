@@ -118,6 +118,7 @@ internal fun MangaReader(ready: HostState.Ready, vm: ReaderHostViewModel, onBack
         Chrome.Hidden -> {}
         is Chrome.Bars -> Bars(
             title = ready.book.title,
+            author = ready.book.author,
             mode = BookKind.MANGA,
             pageInfo = page?.let { PageInfo(it.index + 1, ready.manga.pageCount) },
             onMode = { vm.setMode(it) },
@@ -132,8 +133,15 @@ internal fun MangaReader(ready: HostState.Ready, vm: ReaderHostViewModel, onBack
         )
         Chrome.Toc -> {
             val entries by produceState<List<TocEntry>?>(null) { value = vm.loadToc() }
+            val current = remember(entries) {
+                val here = page?.index ?: return@remember -1
+                currentTocIndex(entries.orEmpty(), tocPosition(here)) { entry ->
+                    entry.link.url().removeFragment().path?.let { ready.manga.indexOf(it) }?.let { tocPosition(it) }
+                }
+            }
             TocScreen(
                 entries = entries,
+                current = current,
                 onBack = { chrome = Chrome.Bars() },
                 onPick = { link ->
                     chrome = Chrome.Hidden

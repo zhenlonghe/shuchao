@@ -3,6 +3,7 @@ package dev.zhenlong.reader.data
 import android.content.Context
 import androidx.room.Dao
 import androidx.room.Database
+import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -67,6 +68,26 @@ interface LibraryDao {
         upsertSeries(series)
     }
 
+    @Query("SELECT * FROM Highlight WHERE bookId = :bookId ORDER BY id")   // 定序：后划的画在上面、长按先命中它
+    fun observeHighlights(bookId: String): Flow<List<Highlight>>
+
+    /** 全部划线：导出到书库根目录的文本文件用（[dev.zhenlong.reader.data.HighlightExport]）。只订阅这一张表，翻页写进度不会触发。 */
+    @Query("SELECT * FROM Highlight ORDER BY createdAt")
+    fun observeAllHighlights(): Flow<List<Highlight>>
+
+    @Query("SELECT * FROM Book WHERE id IN (:ids)")
+    suspend fun booksByIds(ids: List<String>): List<Book>
+
+    @Insert
+    suspend fun insertHighlight(highlight: Highlight): Long
+
+    @Query("UPDATE Highlight SET color = :color WHERE id = :id")
+    suspend fun recolorHighlight(id: Long, color: Int)
+
+    @Query("DELETE FROM Highlight WHERE id = :id")
+    suspend fun deleteHighlight(id: Long)
+
+    // 不随书一起删：书从书库里消失（换了目录、暂时拔了卡）再回来时 id 不变，划线还在
     @Transaction
     suspend fun clearAll() {
         clearBooks()
@@ -74,7 +95,7 @@ interface LibraryDao {
     }
 }
 
-@Database(entities = [Book::class, Series::class], version = 2, exportSchema = false)
+@Database(entities = [Book::class, Series::class, Highlight::class], version = 4, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): LibraryDao
 
@@ -86,7 +107,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v3：划线表。 */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `Highlight` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `bookId` TEXT NOT NULL, " +
+                        "`document` TEXT NOT NULL, `startOffset` INTEGER NOT NULL, `endOffset` INTEGER NOT NULL, `color` INTEGER NOT NULL, " +
+                        "`text` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_Highlight_bookId` ON `Highlight` (`bookId`)")
+            }
+        }
+
+        /** v4：划线记下所在章的标题（导出文本用）。 */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE Highlight ADD COLUMN chapterTitle TEXT")
+            }
+        }
+
         fun open(context: Context): AppDatabase =
-            Room.databaseBuilder(context, AppDatabase::class.java, "library.db").addMigrations(MIGRATION_1_2).build()
+            Room.databaseBuilder(context, AppDatabase::class.java, "library.db")
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
     }
 }

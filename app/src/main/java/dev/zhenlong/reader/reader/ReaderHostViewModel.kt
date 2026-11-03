@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import dev.zhenlong.reader.ReaderApp
 import dev.zhenlong.reader.data.Book
 import dev.zhenlong.reader.data.BookKind
+import dev.zhenlong.reader.data.Highlight
 import dev.zhenlong.reader.data.ReaderFont
 import dev.zhenlong.reader.data.ReaderStyle
 import dev.zhenlong.reader.reader.text.Spot
@@ -194,7 +195,7 @@ class ReaderHostViewModel(app: Application, savedState: SavedStateHandle) : Andr
         ReaderFont.PUBLISHER -> Typeface.DEFAULT
         // 直接映射字体文件：20MB 的字体也是瞬间的事。文件不在了（被删 / 授权被撤）退回默认
         ReaderFont.CUSTOM -> _fonts.value.firstOrNull { it.fileName == style.customFont }?.let { font ->
-            typefaces.getOrPut(font.fileName) {
+            typefaces.getOrPut(font.uri.toString()) {   // 键用 URI：换了字体文件夹后同名字体不串
                 runCatching {
                     reader.contentResolver.openFileDescriptor(font.uri, "r")!!.use { Typeface.Builder(it.fileDescriptor).build() }
                 }.getOrDefault(Typeface.DEFAULT)
@@ -217,6 +218,37 @@ class ReaderHostViewModel(app: Application, savedState: SavedStateHandle) : Andr
             reader.prefs.setFontsFolderUri(uri.toString())
             _fonts.value = withContext(Dispatchers.IO) { listUserFonts(reader, uri) }
         }
+    }
+
+    // ---- 划线（只有原生文字模式）----------------------------------------------------------------------
+
+    val highlights: StateFlow<List<Highlight>> = dao.observeHighlights(bookId)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 把第 [chapter] 章的 [start, end) 划上第 [color] 种颜色。 */
+    fun addHighlight(chapter: Int, start: Int, end: Int, color: Int, text: CharSequence) {
+        val engine = (_state.value as? HostState.Ready)?.text ?: return
+        if (start >= end) return
+        val excerpt = text.subSequence(start, end).toString().replace("\uFFFC", "").trim()
+        val highlight = Highlight(
+            bookId = bookId,
+            document = engine.documentOf(chapter),
+            startOffset = start,
+            endOffset = end,
+            color = color,
+            text = excerpt,
+            createdAt = System.currentTimeMillis(),
+            chapterTitle = engine.titleOf(chapter),
+        )
+        reader.launch { dao.insertHighlight(highlight) }
+    }
+
+    fun recolorHighlight(highlight: Highlight, color: Int) {
+        reader.launch { dao.recolorHighlight(highlight.id, color) }
+    }
+
+    fun deleteHighlight(highlight: Highlight) {
+        reader.launch { dao.deleteHighlight(highlight.id) }
     }
 
     // ---- 漫画翻页 -------------------------------------------------------------------------------

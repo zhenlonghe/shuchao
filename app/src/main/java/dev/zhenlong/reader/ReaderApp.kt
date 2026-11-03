@@ -3,6 +3,7 @@ package dev.zhenlong.reader
 import android.app.Application
 import android.net.Uri
 import dev.zhenlong.reader.data.AppDatabase
+import dev.zhenlong.reader.data.HighlightExport
 import dev.zhenlong.reader.data.Library
 import dev.zhenlong.reader.data.Prefs
 import dev.zhenlong.reader.data.ReadState
@@ -10,6 +11,7 @@ import dev.zhenlong.reader.data.arrangeByRecent
 import dev.zhenlong.reader.data.Settings
 import coil.imageLoader
 import dev.zhenlong.reader.scan.LibraryScanner
+import dev.zhenlong.reader.scan.ScanState
 import dev.zhenlong.reader.ui.coverRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +19,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emitAll
@@ -82,6 +91,41 @@ class ReaderApp : Application() {
             val root = settings.first { it != null }?.libraryRootUri ?: return@launch
             if (withContext(Dispatchers.IO) { scanner.thumbnailsOutdated() }) startScan(Uri.parse(root))
         }
+        exportHighlightsOnChange()
+    }
+
+    private val exportRequests = MutableStateFlow(0)
+
+    /** 划线文件写不进书库根目录（旧版本只拿了读授权）：设置页提示重新选一次书库文件夹。 */
+    val highlightExportBlocked = MutableStateFlow(false)
+
+    /** 授权变了（重新选了书库文件夹）之后再导一次。 */
+    fun exportHighlights() {
+        exportRequests.value++
+    }
+
+    /**
+     * 划线一变就把全部划线重写进书库根目录的 [HighlightExport.FILE_NAME]。只订阅 Highlight 表（翻页写进度不触发）；
+     * 合并 1.5s 内的连续改动；启动后先等几秒，不和冷启动抢 IO。内容没变就不写（见 [HighlightExport.write]）。
+     */
+    @OptIn(FlowPreview::class)
+    private fun exportHighlightsOnChange() {
+        appScope.launch(Dispatchers.IO) {
+            delay(EXPORT_STARTUP_DELAY_MS)
+            val roots = settings.filterNotNull().map { it.libraryRootUri }.distinctUntilChanged()
+            // 扫描中不导：换回含旧划线的书库时，Book 记录要等扫描完才回来，早导会把这些书写成「已不在书库里」。扫完再导一次
+            val scanning = scanner.state.map { it is ScanState.Running }.distinctUntilChanged()
+            combine(db.dao().observeAllHighlights(), roots, exportRequests, scanning) { highlights, root, _, busy -> Triple(highlights, root, busy) }
+                .debounce(EXPORT_DEBOUNCE_MS)
+                .collectLatest { (highlights, root, busy) ->
+                    if (root == null || busy) return@collectLatest
+                    val ids = highlights.map { it.bookId }.distinct()
+                    val books = ids.chunked(500).flatMap { db.dao().booksByIds(it) }.associateBy { it.id }
+                    val text = HighlightExport.format(highlights, books)
+                    // 一条划线都没有、文件也不存在时不新建空文件
+                    highlightExportBlocked.value = !HighlightExport.write(this@ReaderApp, Uri.parse(root), text, createIfMissing = highlights.isNotEmpty())
+                }
+        }
     }
 
     private var preloadedFirstScreen: List<String>? = null   // 只在 reads 那条流（Dispatchers.Default 上串行）里读写
@@ -106,3 +150,6 @@ class ReaderApp : Application() {
         appScope.launch { scanner.scan(root) }
     }
 }
+
+private const val EXPORT_STARTUP_DELAY_MS = 3_000L
+private const val EXPORT_DEBOUNCE_MS = 1_500L

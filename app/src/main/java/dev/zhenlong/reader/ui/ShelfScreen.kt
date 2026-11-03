@@ -4,12 +4,14 @@ import android.content.Context
 import android.util.DisplayMetrics
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.ReportDrawnWhen
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -37,16 +39,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -54,7 +57,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
@@ -71,7 +73,6 @@ import dev.zhenlong.reader.data.Book
 import dev.zhenlong.reader.data.ShelfItem
 import dev.zhenlong.reader.data.ReadState
 import dev.zhenlong.reader.data.arrangeByRecent
-import dev.zhenlong.reader.data.progressLabel
 import dev.zhenlong.reader.data.shelfProgress
 import dev.zhenlong.reader.scan.ScanState
 import java.io.File
@@ -86,16 +87,14 @@ private val ColumnGap = ScreenMargin   // 列间距 = 屏幕边距：封面之�
 private val MinCoverWidth = 80.dp     // 键盘弹出等矮窗口下，宁可少放一行也不把封面压到看不清
 private val CoverToCaption = 8.dp
 private val MinRowGap = 8.dp          // 行间（以及网格上下）留白的下限；通常远大于此，见 PagedGrid
-private val MinFooterHeight = 32.dp   // 下留白够这么高，页码就放进留白里；不够（矮窗口）才另占一条页脚
 private val TitleLine = 19.sp         // 行高用 sp：跟随系统字号，说明文字不会被固定 dp 裁掉
 private val ProgressBarHeight = 2.dp
-private val ProgressToLabel = 6.dp
-private val ProgressLabelWidth = 40.sp   // 「已读完」「99%」都放得下：数字定宽，一行里各格的进度条一样长
+private val CoverToProgress = 5.dp    // 进度条贴着封面下沿，像书脚的一道线；不写百分数（进书就能看到）
 private val BadgeSize = 26.dp         // 封面宽约 112dp，角标占不到 1/4；再小就像个污点
 private val BadgeInset = 8.dp
 private val CaptionGray = Color(0xFF5A5A5A)   // 说明文字压淡一档：封面是主角，黑字会和封面抢眼。16 级灰下仍清楚
 // 封面描边与进度条底轨：#999 正好是 16 级灰的第 9 级，比黑框轻、比 #CCC 看得见（对照微信读书：封面是浅灰细边，不是黑框）
-private val EdgeGray = Color(0xFF999999)
+internal val EdgeGray = Color(0xFF999999)
 
 /**
  * 顶层书架一格封面的像素尺寸（竖屏、三行都放得下时宽度顶满的情形）。
@@ -124,32 +123,30 @@ fun ShelfScreen(
     val items = if (topLevel) remember(ui.items, reads) { arrangeByRecent(ui.items, reads) } else ui.items
     val scan = ui.scan
     val message: Pair<String, (() -> Unit)?>? = when {
-        scan is ScanState.Running -> (if (scan.total > 0) "正在扫描 ${scan.done}/${scan.total}" else "正在扫描") to null
+        // 已经有书时扫描（下拉刷新）不换掉书架，只在顶栏写一句：整屏换成提示再换回来，墨水屏要多刷两次
+        scan is ScanState.Running && items.isEmpty() -> (if (scan.total > 0) "正在扫描 ${scan.done}/${scan.total}" else "正在扫描") to null
         !ui.hasLibraryRoot -> "在设置里选择书库文件夹" to onOpenSettings
         scan is ScanState.Failed && items.isEmpty() -> scan.message to onOpenSettings
         items.isEmpty() -> (if (ui.query.isNullOrBlank()) "书库里没有 EPUB" else "没有匹配的书") to null
         else -> null
     }
-    // 搜索和设置不常用：书架在时顶栏收起，整屏都给书；在第一屏再下拉才盖在封面上方出现。
-    // 没有书架可看（未选书库 / 扫描中 / 空）时顶栏固定显示，否则进不了设置
-    val barHidden = message == null && ui.query == null
-    var barRevealed by remember(ui.seriesName, ui.page) { mutableStateOf(false) }
-    val topBar = @Composable {
-        TopBar(seriesName = ui.seriesName, onBack = vm::closeSeries, onSearch = vm::startSearch, onSettings = onOpenSettings)
+    // 顶栏常驻（用户 2026-11-03）：顶层是搜索框（最右是设置），套内是「← 套名」。顶层书架在第一屏再下拉 = 刷新书架（重新扫描），扫描时搜索框里写一句
+    val status = when {
+        message != null -> null
+        scan is ScanState.Running -> "正在刷新书架…"   // 不写进度数字：每变一次就局刷一次顶栏
+        scan is ScanState.Failed -> scan.message
+        else -> null
     }
 
-    BackHandler(enabled = barRevealed || ui.query != null || ui.seriesName != null) {
-        when {
-            barRevealed -> barRevealed = false
-            ui.query != null -> vm.closeSearch()
-            else -> vm.closeSeries()
-        }
+    BackHandler(enabled = ui.query != null || ui.seriesName != null) {
+        if (ui.query != null) vm.closeSearch() else vm.closeSeries()
     }
 
     Column(Modifier.fillMaxSize().background(Color.White).stableSystemBarsPadding().imePadding()) {
         when {
             ui.query != null -> SearchBar(initial = ui.query, onQuery = vm::setQuery, onClose = vm::closeSearch)
-            !barHidden -> topBar()
+            ui.seriesName != null -> SeriesBar(ui.seriesName, onBack = vm::closeSeries)
+            else -> SearchPill(hint = status.orEmpty(), onSearch = vm::startSearch, onSettings = onOpenSettings)
         }
         Box(Modifier.fillMaxSize()) {
             if (message != null) {
@@ -160,9 +157,8 @@ fun ShelfScreen(
                     // 顶层书架封面下是进度条：书名封面上已经有了。套内（区别只在「卷01」）和搜索（要看哪个字匹配上）仍写书名
                     progressOf = if (ui.seriesName == null && ui.query == null) { item -> shelfProgress(item, reads) } else null,
                     page = ui.page,
-                    footerLabel = ui.seriesName.takeIf { barHidden },   // 没有顶栏时，靠页脚知道自己在哪一套里
                     onPage = vm::setPage,
-                    onPullDownAtTop = { if (barHidden) barRevealed = true },
+                    onPullDownAtTop = { if (topLevel && ui.query == null) vm.rescan() },
                     onClick = { item ->
                         when (item) {
                             is ShelfItem.Single -> onOpenBook(item.book)
@@ -171,40 +167,41 @@ fun ShelfScreen(
                     },
                 )
             }
-            if (barHidden && barRevealed) {
-                // 顶栏是 overlay：出现 / 消失只重绘顶上这一条，网格不动（SPEC §2.5）。点别处或上滑收起
-                Box(
-                    Modifier.fillMaxSize()
-                        .pointerInput(Unit) { detectTapGestures { barRevealed = false } }
-                        .verticalPageSwipe(Unit) { if (it > 0) barRevealed = false },
-                )
-                Column(Modifier.background(Color.White).pointerInput(Unit) { detectTapGestures { } }) {
-                    topBar()
-                    Box(Modifier.fillMaxWidth().height(OnePx).background(Color.Black))
-                }
-            }
         }
     }
 }
 
-/** 顶层只有右侧两个图标；进入一套后左侧出现「← 套名」。 */
+/**
+ * 顶层书架的搜索框（用户 2026-11-03，参考微信读书）：圆角胶囊，左 🔍、最右设置齿轮，不写提示语、不画竖线（用户 2026-11-03：都知道怎么搜）。点框 = 进搜索。
+ * 扫描时框里写一句「正在刷新书架…」：不另占位置，也不写进度数字（每变一次就局刷一次）。
+ */
 @Composable
-private fun TopBar(seriesName: String?, onBack: () -> Unit, onSearch: () -> Unit, onSettings: () -> Unit) {
+private fun SearchPill(hint: String, onSearch: () -> Unit, onSettings: () -> Unit) {
+    PillRow {
+        Row(Modifier.weight(1f).fillMaxHeight().clickable(onClick = onSearch), verticalAlignment = Alignment.CenterVertically) {
+            PillSearchIcon()
+            Text(hint, color = CaptionGray, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        PillIcon(R.drawable.ic_settings, "设置", onSettings)
+    }
+}
+
+/** 进一套之后：「← 套名」，和搜索框一样高，进出一套时网格不上下跳。 */
+@Composable
+private fun SeriesBar(name: String, onBack: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().height(BarHeight).padding(horizontal = ScreenMargin - BarIconInset),
+        Modifier.fillMaxWidth().height(ShelfBarHeight).padding(horizontal = ScreenMargin - BarIconInset),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (seriesName != null) {
-            BarIcon(R.drawable.ic_back, "返回", onBack)
-            Text(seriesName, Modifier.weight(1f), fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        } else {
-            Spacer(Modifier.weight(1f))
-        }
-        BarIcon(R.drawable.ic_search, "搜索", onSearch)
-        BarIcon(R.drawable.ic_settings, "设置", onSettings)
+        BarIcon(R.drawable.ic_back, "返回", onBack)
+        Text(name, Modifier.weight(1f), fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
+/**
+ * 搜索中：同一个胶囊，🔍 换成返回箭头（点了退出搜索，同返回键），中间是输入框，最右的设置换成清空（有字时才有）。
+ * 框的位置、大小、输入框的起点都不变，只换图标。
+ */
 @Composable
 private fun SearchBar(initial: String, onQuery: (String) -> Unit, onClose: () -> Unit) {
     // 文本留在本地 state：经 ViewModel 异步绕一圈会打断中文输入法的组词。
@@ -214,13 +211,12 @@ private fun SearchBar(initial: String, onQuery: (String) -> Unit, onClose: () ->
     // 只在刚点开搜索时弹键盘；带着查询词从阅读器回来时不弹
     LaunchedEffect(Unit) { if (initial.isEmpty()) focus.requestFocus() }
 
-    Row(
-        Modifier.fillMaxWidth().height(BarHeight).padding(horizontal = ScreenMargin - BarIconInset),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BarIcon(R.drawable.ic_back, "返回", onClose)
-        val style = TextStyle(color = Color.Black, fontSize = 16.sp)
-        val hairline = with(LocalDensity.current) { 1.toDp().toPx() }
+    PillRow {
+        // 和 🔍 占同一块位置（左 14 + 18 + 右 8），点区是整块高度
+        Box(Modifier.fillMaxHeight().clickable(onClick = onClose), contentAlignment = Alignment.Center) {
+            Image(painterResource(R.drawable.ic_back), "返回", Modifier.padding(start = 14.dp, end = 8.dp).size(18.dp))
+        }
+        val style = TextStyle(color = Color.Black, fontSize = 15.sp)
         BasicTextField(
             value = text,
             onValueChange = {
@@ -234,27 +230,57 @@ private fun SearchBar(initial: String, onQuery: (String) -> Unit, onClose: () ->
             cursorBrush = SolidColor(Color.Transparent),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             decorationBox = { field ->
-                // 没有光标，就靠一条底线说明「这里可以输入」
-                Box(
-                    Modifier.fillMaxWidth().height(32.dp).drawBehind {
-                        drawLine(Color.Black, Offset(0f, size.height), Offset(size.width, size.height), hairline)
-                    },
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    if (text.isEmpty()) Text("书名 / 作者 / 文件名", style = style)
+                Box(contentAlignment = Alignment.CenterStart) {
                     field()
                 }
             },
         )
-        // 清空按钮的位置始终占着，输入第一个字时底线不会跳
-        Box(Modifier.size(BarHeight)) {
+        // 清空按钮的位置始终占着（和设置齿轮同宽），输入第一个字时输入框不会变窄
+        Box(Modifier.fillMaxHeight().width(PillIconWidth)) {
             if (text.isNotEmpty()) {
-                BarIcon(R.drawable.ic_close, "清空") {
+                PillIcon(R.drawable.ic_close, "清空") {
                     text = ""
                     onQuery("")
                 }
             }
         }
+    }
+}
+
+private val ShelfBarHeight = 56.dp
+private val PillHeight = 40.dp
+private val PillIconWidth = 48.dp
+private val BarBelowPill = (ShelfBarHeight - PillHeight) / 2
+// 胶囊只描一道 #999 细边、不铺灰底：彩膜屏上浅灰底几乎就是白（见 EdgeGray），细边才看得出「这里是个框」
+private val PillShape = RoundedCornerShape(50)
+
+/** 胶囊外框：左右缘对齐封面外缘（ScreenMargin）。 */
+@Composable
+private fun PillRow(content: @Composable RowScope.() -> Unit) {
+    Box(Modifier.fillMaxWidth().height(ShelfBarHeight).padding(horizontal = ScreenMargin), contentAlignment = Alignment.Center) {
+        Row(
+            Modifier.fillMaxWidth().height(PillHeight).clip(PillShape).border(OnePx, EdgeGray, PillShape),
+            verticalAlignment = Alignment.CenterVertically,
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun PillSearchIcon() {
+    Image(
+        painterResource(R.drawable.ic_search),
+        null,
+        Modifier.padding(start = 14.dp, end = 8.dp).size(18.dp),
+        colorFilter = ColorFilter.tint(CaptionGray),
+    )
+}
+
+
+@Composable
+private fun PillIcon(resId: Int, description: String, onClick: () -> Unit) {
+    Box(Modifier.fillMaxHeight().width(PillIconWidth).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Image(painterResource(resId), description, Modifier.size(20.dp))
     }
 }
 
@@ -279,7 +305,7 @@ private fun CenterText(text: String, onClick: (() -> Unit)? = null) {
 }
 
 /**
- * 整屏分页网格（4 列 × 3 行）：不滚动，上下滑或点页脚左/右半翻屏，瞬切（SPEC §2.6）。
+ * 整屏分页网格（4 列 × 3 行）：不滚动，上下滑翻屏，瞬切（SPEC §2.6）。右边距里一道滚动提示条（[PageScrollbar]）说明在第几屏，点它的上 / 下半也能翻。
  * [progressOf] 非 null 时封面下画进度条，否则写书名。
  */
 @Composable
@@ -287,17 +313,16 @@ private fun PagedGrid(
     items: List<ShelfItem>,
     progressOf: ((ShelfItem) -> Float?)?,
     page: Int,
-    footerLabel: String?,
     onPage: (Int) -> Unit,
     onPullDownAtTop: () -> Unit,
     onClick: (ShelfItem) -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        // 进度条那一行和书名一样高（行高 TitleLine），两种说明文字下封面尺寸相同
-        val captionHeight = with(LocalDensity.current) { CoverToCaption + TitleLine.toDp() }
+        // 封面下的说明：顶层只有一道进度条，套内 / 搜索是一行书名。封面尺寸由宽度定（三种视图一样大），说明省下的高度归入留白
+        val captionHeight = if (progressOf != null) CoverToProgress + ProgressBarHeight
+            else with(LocalDensity.current) { CoverToCaption + TitleLine.toDp() }
         val widthBound = (maxWidth - ScreenMargin * 2 - ColumnGap * (COLUMNS - 1)) / COLUMNS
-        // 行数、封面尺寸按「页脚在」算（页脚要不要，得先知道一屏放几本）
-        val heightBudget = maxHeight - PagerFooterHeight
+        val heightBudget = maxHeight
         fun coverWidthFor(rows: Int) =
             minOf(widthBound, (heightBudget - MinRowGap * (rows + 1) - captionHeight * rows) / (1.5f * rows))
         val rows = (MAX_ROWS downTo 1).firstOrNull { coverWidthFor(it) >= MinCoverWidth } ?: 1
@@ -307,15 +332,11 @@ private fun PagedGrid(
         val perPage = rows * COLUMNS
         val pageCount = ((items.size + perPage - 1) / perPage).coerceAtLeast(1)
         val current = page.coerceIn(0, pageCount - 1)
-        // 封面通常是宽度顶满、高度有余：余量均分到网格上方、行间、下方这 rows + 1 段，上下留白一样宽。
-        // 页码 / 套名放进最下面那段留白里（像书页的页码落在下边距里），不另占一条：
-        // 否则页脚压在网格下面，底部是「留白 + 页脚」两段，整屏显得上轻下重
+        // 封面通常是宽度顶满、高度有余：余量均分到网格上方、行间、下方这 rows + 1 段。
+        // 顶栏里搜索框下面本来就有一截空（[BarBelowPill]），算进上方那段，看上去「框底 → 封面顶」和行间一样宽
         val content = (coverHeight + captionHeight) * rows
-        val looseGap = (maxHeight - content) / (rows + 1)
-        val footerShown = pageCount > 1 || footerLabel != null
-        val footerInMargin = looseGap >= MinFooterHeight
-        val gap = if (footerShown && !footerInMargin) (heightBudget - content) / (rows + 1) else looseGap
-        val footerHeight = if (footerInMargin) gap else PagerFooterHeight
+        val gap = (maxHeight + BarBelowPill - content) / (rows + 1)
+        val topGap = (gap - BarBelowPill).coerceAtLeast(MinRowGap)
         val go = { delta: Int ->
             val target = current + delta
             when {
@@ -333,13 +354,12 @@ private fun PagedGrid(
                 .forEach { context.imageLoader.enqueue(coverRequest(context, it)) }
         }
 
-        Column(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize()) {
             Column(
                 Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
+                    .fillMaxSize()
                     .verticalPageSwipe(current, pageCount) { go(it) }   // 留白处也能滑
-                    .padding(start = ScreenMargin, end = ScreenMargin, top = gap),
+                    .padding(start = ScreenMargin, end = ScreenMargin, top = topGap),
             ) {
                 val start = current * perPage
                 for (r in 0 until rows) {
@@ -354,7 +374,12 @@ private fun PagedGrid(
                     }
                 }
             }
-            if (footerShown) PagerFooter(current, pageCount, footerLabel, footerHeight) { go(it) }
+            if (pageCount > 1) {
+                PageScrollbar(
+                    current, pageCount,
+                    Modifier.align(Alignment.TopEnd).padding(top = topGap, bottom = gap).width(ScreenMargin).fillMaxHeight(),
+                ) { go(it) }
+            }
         }
     }
 }
@@ -404,35 +429,33 @@ private fun Cell(item: ShelfItem, progressOf: ((ShelfItem) -> Float?)?, coverWid
 }
 
 /**
- * 封面下的极简进度：一条 2dp 的进度条（[EdgeGray] 底轨 + 黑色已读段）+ 右侧定宽的百分数。
- * 底轨要画：没有底轨时 1% 只是封面下一个黑点，看着像污渍（用户 2026-10-29 对照微信读书反馈「不精致」）；
- * #CCC 在 16 级灰下几乎是白所以之前去掉了，#999 看得见。
- * [progress] 为 null（没读过）时什么都不画，但仍占一行高，封面上下对齐不变。
+ * 封面下的极简进度：贴着封面下沿、和封面同宽的一道线，不写数字（用户 2026-11-03）。
+ * 读过的部分是 2dp 黑色实线，没读的部分是一道浅灰（[EdgeGray]）细虚线（用户 2026-11-03：不要「方框」似的整条灰底轨）。
+ * 没读的部分要画出来：只有黑段时 1% 只是封面下一个黑点，看着像污渍（用户 2026-10-29）。读过一点的黑段至少 [MinProgressFill]。
+ * [progress] 为 null（没读过）时什么都不画，但仍占位，封面上下对齐不变。
  */
 @Composable
 private fun ProgressCaption(progress: Float?) {
-    val density = LocalDensity.current
-    Row(
-        Modifier.fillMaxWidth().padding(top = CoverToCaption).height(with(density) { TitleLine.toDp() }),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (progress != null) {
-            Box(Modifier.weight(1f).height(ProgressBarHeight).background(EdgeGray)) {
-                Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).background(Color.Black))
-            }
-            Spacer(Modifier.width(ProgressToLabel))
-            Text(
-                progressLabel(progress),
-                Modifier.width(with(density) { ProgressLabelWidth.toDp() }),
-                color = CaptionGray,
-                fontSize = 12.sp,
-                lineHeight = TitleLine,
-                maxLines = 1,
-                textAlign = TextAlign.End,
+    Canvas(Modifier.fillMaxWidth().padding(top = CoverToProgress).height(ProgressBarHeight)) {
+        if (progress == null) return@Canvas
+        val read = size.width * (if (progress > 0f) progress.coerceIn(MinProgressFill, 1f) else 0f)
+        val y = size.height / 2
+        if (read > 0f) drawLine(Color.Black, Offset(0f, y), Offset(read, y), strokeWidth = size.height)
+        if (read < size.width) {
+            val dash = ProgressDash.toPx()
+            // 虚线从右端往回排：右端总是落在整段上，各格的线尾对齐；左端紧挨黑段处空一个间隔
+            drawLine(
+                EdgeGray, Offset(size.width, y), Offset(read + dash, y),
+                strokeWidth = ProgressDashWidth.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(dash, dash)),
             )
         }
     }
 }
+
+private val ProgressDash = 3.dp
+private val ProgressDashWidth = 1.5.dp
+private const val MinProgressFill = 0.03f
 
 /** 成套条目的册数：封面右上角一枚白底黑边的圆形角标，在深浅封面上都看得清；三位数会拉成胶囊。 */
 @Composable

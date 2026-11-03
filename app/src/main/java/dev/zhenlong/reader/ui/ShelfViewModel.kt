@@ -78,6 +78,11 @@ class ShelfViewModel(app: Application) : AndroidViewModel(app) {
     fun setQuery(q: String) = nav.update { it.copy(query = q, searchPage = 0) }
     fun closeSearch() = nav.update { it.copy(query = null) }
 
+    /** 第一屏再下拉：重新扫描书库（增量，没变的书不重读）。扫描中再拉会被忽略。 */
+    fun rescan() {
+        reader.settings.value?.libraryRootUri?.let { reader.startScan(android.net.Uri.parse(it)) }
+    }
+
     fun setPage(page: Int) = nav.update {
         when {
             !it.query.isNullOrBlank() -> it.copy(searchPage = page)
