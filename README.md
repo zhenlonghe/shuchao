@@ -1,4 +1,5 @@
 # 墨案
+<img width="1086" height="724" alt="3EE561DC-227A-4C79-A382-91D2A8526A47_1_105_c" src="https://github.com/user-attachments/assets/ed1c0bc6-19ab-481b-bdfb-15405dd5d16f" />
 
 > 专为电子墨水屏打造的 Android 本地阅读器，支持 EPUB 与漫画。  
 > 致虚守静，专于一境：将整理好的本地藏书整饬陈列，开卷即读，不着冗物。
