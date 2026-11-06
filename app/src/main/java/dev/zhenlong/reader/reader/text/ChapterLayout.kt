@@ -7,9 +7,11 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.text.LineBreaker
 import android.text.Layout
+import android.text.Spannable
 import android.text.Spanned
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.text.style.LineHeightSpan
 import android.text.style.ReplacementSpan
 import kotlin.math.roundToInt
 
@@ -30,6 +32,8 @@ class PictureSpan(
     var bitmap: Bitmap? = null
 
     private val inline = srcHeight <= INLINE_MAX_PX
+    /** 大图：独占一行、贴着行底画。 */
+    val isBlock get() = !inline
     private val fit = minOf(maxWidth.toFloat() / srcWidth, maxHeight.toFloat() / srcHeight)
     private val scale = when {
         inline -> textSize / srcHeight
@@ -63,6 +67,24 @@ class PictureSpan(
     }
 }
 
+/**
+ * [start, end) 这一行底下要不要加段距：以 [ParagraphBreak] 标着的换行结尾（段末，不是 `<br>`），
+ * 且行里没有大图——大图贴着行底画，加了段距空白会跑到图上面，整页插图还会比版心高。
+ */
+private fun hasParagraphGap(text: Spanned, start: Int, end: Int): Boolean =
+    end > start && text[end - 1] == '\n' &&
+        text.getSpans(end - 1, end, ParagraphBreak::class.java).isNotEmpty() &&
+        text.getSpans(start, end, PictureSpan::class.java).none { it.isBlock }
+
+/** 给段末那一行加 [gap] px 行底（[hasParagraphGap]）。整章挂一个就够：StaticLayout 每排一行都会问它。 */
+private class ParagraphGap(private val gap: Int) : LineHeightSpan {
+    override fun chooseHeight(text: CharSequence, start: Int, end: Int, spanstartv: Int, lineHeight: Int, fm: Paint.FontMetricsInt) {
+        if (!hasParagraphGap(text as Spanned, start, end)) return
+        fm.descent += gap
+        fm.bottom += gap
+    }
+}
+
 /** 一段要涂底色的文字（划线、正在选的选区）：章内字符区间 [start, end)，[color] 是 ARGB。 */
 class Mark(val start: Int, val end: Int, val color: Int)
 
@@ -78,6 +100,18 @@ class ChapterLayout(val chapter: Int, val content: ChapterText, paint: TextPaint
     // 行距滑块是 CSS 的含义（行高 = 字号 × 倍数）；StaticLayout 的倍数却是乘在字体的自然行高上的，要换算
     private val spacing = lineHeight * paint.textSize / (paint.fontMetrics.descent - paint.fontMetrics.ascent)
 
+    /**
+     * 段距 = 行距（行与行之间的空白，行高 − 字号）× 1.5：段末那一行底下多垫半个行距，随行距滑块等比变。
+     * 垫在行的 descent 上，StaticLayout 之后还会把它乘上 [spacing]，所以先除掉。
+     */
+    private val paragraphGap = ((lineHeight - 1f) * paint.textSize * 0.5f / spacing).roundToInt()
+
+    // ChapterText 每次排版都是新解析出来的，直接挂上，不复制整章
+    init {
+        val text = content.text
+        if (paragraphGap > 0 && text is Spannable) text.setSpan(ParagraphGap(paragraphGap), 0, text.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
+    }
+
     val layout: StaticLayout = StaticLayout.Builder.obtain(content.text, 0, content.text.length, paint, width)
         .setLineSpacing(0f, spacing)
         .setBreakStrategy(LineBreaker.BREAK_STRATEGY_HIGH_QUALITY)
@@ -85,6 +119,14 @@ class ChapterLayout(val chapter: Int, val content: ChapterText, paint: TextPaint
         .setJustificationMode(LineBreaker.JUSTIFICATION_MODE_INTER_WORD)
         .setIncludePad(false)
         .build()
+
+    /** 第 [line] 行底下段距占的高度（StaticLayout 把垫进去的乘过 [spacing]）；分页、居中时不算内容。 */
+    private fun gapBelow(line: Int): Int =
+        if (paragraphGap > 0 && hasParagraphGap(content.text, layout.getLineStart(line), layout.getLineEnd(line))) (paragraphGap * spacing).roundToInt()
+        else 0
+
+    /** 第 [line] 行内容的下沿：行底减去段距。 */
+    private fun contentBottom(line: Int) = layout.getLineBottom(line) - gapBelow(line)
 
     /** 每页的第一行；最后多放一个哨兵 = 总行数。 */
     private val pageStarts: IntArray = paginate()
@@ -98,7 +140,7 @@ class ChapterLayout(val chapter: Int, val content: ChapterText, paint: TextPaint
             starts += line
             val top = layout.getLineTop(line)
             var end = line + 1
-            while (end < lines && layout.getLineBottom(end) - top <= pageHeight) end++
+            while (end < lines && contentBottom(end) - top <= pageHeight) end++
             // 标题不落在页底：页尾是标题行就整个挪到下一页（整页都是标题时不挪）
             var keep = end
             while (keep > line + 1 && end < lines && isHeading(keep - 1)) keep--
@@ -139,9 +181,9 @@ class ChapterLayout(val chapter: Int, val content: ChapterText, paint: TextPaint
     private fun topInset(p: Int): Int {
         val first = pageStarts[p]
         val last = pageStarts[p + 1] - 1
-        val spare = pageHeight - (layout.getLineBottom(last) - layout.getLineTop(first))
+        val spare = pageHeight - (contentBottom(last) - layout.getLineTop(first))
         if (spare <= 0) return 0
-        val lineHeight = layout.getLineBottom(last) - layout.getLineTop(last)
+        val lineHeight = contentBottom(last) - layout.getLineTop(last)
         return if (isPictureOnly(p) || spare <= lineHeight * 3 / 2) spare / 2 else 0
     }
 

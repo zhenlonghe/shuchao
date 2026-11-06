@@ -20,6 +20,9 @@ import org.jsoup.nodes.TextNode
 /** 标记：这段是标题（分页时不让标题孤零零落在页底）。 */
 class HeadingSpan
 
+/** 标记：这个换行是块（段落、标题…）的结尾，不是 `<br>`。排版时在这里加段距。 */
+class ParagraphBreak
+
 /** 标记：可点的链接。href 是原文里的相对地址。 */
 class LinkSpan(val href: String)
 
@@ -176,7 +179,11 @@ class ChapterParser(private val em: Int, private val image: (src: String) -> Any
     /** 开始 / 结束一个块：保证落在新的一行上，连续的空行并成一个换行。 */
     private fun block() {
         trimEnd()
-        if (out.isNotEmpty()) out.append('\n')
+        if (out.isNotEmpty()) {
+            val afterBlank = out.endsWith(BLANK)   // 标题上下撑空行的那一行：本身就是留白，不再加段距
+            out.append('\n')
+            if (!afterBlank) out.setSpan(ParagraphBreak(), out.length - 1, out.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
     }
 
     private fun trimEnd() {

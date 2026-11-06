@@ -102,6 +102,9 @@ adb install -r app/build/outputs/apk/release/app-release.apk   # 首次装正式
   → `ChapterLayout`（一章一个 StaticLayout，按行高分页；标题不落页底；`PictureSpan` 大图独占一行缩到版心、小图随文）
   → `TextEngine`（单循环朝最新目标干活；章内翻页同步换页号，跨章才排版，所以下一章提前排好；最多留 3 章；图片在翻到前解码）
   → `NativeTextReader`（Compose Canvas 直接画）
+- **段距**（用户 2026-11-06）= 行间空白（行高 − 字号）× 1.5，随行距滑块等比变：`ChapterParser.block()` 给块结尾的换行挂 `ParagraphBreak`（`<br>` 不挂），
+  `ChapterLayout` 用一个 `LineHeightSpan`（`ParagraphGap`）给段末行加行底；标题上下的零宽空行、有大图的行（图贴行底画）不加；
+  分页 / `topInset` 用 `contentBottom()`（行底减段距），段尾那截空白不算内容。只改 span、不改字符，划线 / 进度偏移不受影响
 - 细节：行距滑块是 CSS 含义（字号 × 倍数），StaticLayout 的倍数乘的是字体自然行高，要换算；源码里两个汉字间的**换行**不产生空格（真空格保留）；
   段首全角空格去掉、统一用两字缩进；每章一支自己的 TextPaint（后台排版和主线程绘制并发）；自定义字体用 `Typeface.Builder(fd)` 直接映射，22MB 也不慢
 - 版心不「偏上」（用户 2026-09-17 反馈）：整页文字多出来的那不到一行的空白上下均分（`ChapterLayout.topInset`），只有一张图的页垂直居中，
@@ -139,13 +142,16 @@ adb install -r app/build/outputs/apk/release/app-release.apk   # 首次装正式
   再选渲染器：**漫画 → `MangaReader`**（`MangaSession` 从 ZIP 找到每页 XHTML 引用的那张图直接解码，Compose `Image` 显示；
   当前页 ±1 预解码、最多留 3 页；非图片页退化成纯文字）；**文字 → `TextReader`**（Readium，`ReaderViewModel` 用到时才创建）
 - 为什么漫画不走 Readium：WebView 要初始化 + 同时加载前后三页大图，回调「首页就绪」之后图片还要再解码上屏，真机录屏是 2.5s+；直读就是一次 JPEG 解码
+- **双指放大**（用户 2026-11-04）：`MangaReader` 一个 `awaitEachGesture` 判定点 / 滑 / 捏 / 拖；1–4 倍跟手（`graphicsLayer`，不重新解码——图本来就按不小于版心解码），
+  放大时单指拖 = 平移（限在图超出版心的范围内）、不翻页（横向没超出版心时明显的横滑照常翻页），点两侧照常翻页；
+  翻页或缩回 1 倍即复原——复原在组合里当场做，不用 LaunchedEffect（否则新页先按旧倍数画一帧、多刷一次屏）；没有图的页不响应捏合
 - 漫画的目录不常用：点开时才用 Readium 解析一次（`loadToc`）；目录项 → 章节文档 → 页码
 - 两种渲染器都同时写 `locatorJson` 和 `pageIndex`（章节序号），来回切模式能从同一处接着读
 - 判定在**开书时**做（规则同 SPEC §6：固定版式，或抽样 12 个章节 ≥ 90% 是「一页一图」），结果写回 `Book.kind`；
   不在扫描时做——书架用不到 kind，而给 500 本 70MB 的书补判定要全部重扫。`MangaDetector` 是纯函数，有单测
 - 量开书时间要看**录屏的帧时间戳**（`scratchpad` 里的 opentime 做法：screenrecord + `mpdecimate,showinfo`），不要只信 Readium 的回调——回调比真正上屏早很多
 - 工具条顶栏右侧「文字 漫画」切换，当前模式加下划线；手动切换写 `Book.kindOverride`，按书记住
-- 两套偏好：DataStore 里漫画的键带 `manga.` 前缀（`Settings.styleFor(kind)`）。漫画默认四边零留白；漫画模式**不显示页脚**（页数在工具条顶栏看），
+- 两套偏好：DataStore 里漫画的键带 `manga.` 前缀（`Settings.styleFor(kind)`）。漫画默认四边零留白；漫画模式**不显示页脚**（页数在工具条顶栏看；呼出工具条时底栏下方补一行时间 / 电量，用户 2026-11-05），
   底栏只有「目录 / 版式」，版式里没有行距
 - 左右边距档位从 0 起（0 给漫画铺满用）。旧键 `marginStep` 是从 0.25 起的，读旧值时 +1，新键叫 `hMarginStep`
 

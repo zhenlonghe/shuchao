@@ -537,6 +537,8 @@ internal fun Bars(
                 }
                 BottomButton(R.drawable.ic_layout, "版式", panel == Panel.LAYOUT) { onPanel(Panel.LAYOUT) }
             }
+            // 漫画平时没有页脚（画面全给图），呼出工具条时在最底下补一行时间 / 电量（用户 2026-11-05）；页数已在顶栏
+            if (mode == BookKind.MANGA) PageFooter(null)
         }
     }
 }
